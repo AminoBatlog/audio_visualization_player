@@ -20,7 +20,7 @@ export interface VisualizerSettings {
   pythonBridgeDeviceId: string
   autoNowPlayingEnabled: boolean
   autoNowPlayingProvider: 'windows-media-session'
-  autoNowPlayingPlayerFilter: 'qqmusic'
+  autoNowPlayingPlayerFilter: 'qqmusic' | 'netease'
   autoNowPlayingFallbackImage: 'default-center-image'
   bridge_version?: string
   config_revision?: number
@@ -93,3 +93,4 @@ export const defaultNowPlayingState: NowPlayingState = {
   updatedAtMs: 0,
   error: '',
 }
+

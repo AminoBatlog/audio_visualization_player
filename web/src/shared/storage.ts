@@ -2,12 +2,19 @@ import { defaultNowPlayingState, defaultSettings, type NowPlayingState, type Vis
 
 const STORAGE_KEY = 'audio-ring-visualizer-settings'
 
+function normalizeSettings(settings: Partial<VisualizerSettings>): VisualizerSettings {
+  const merged = { ...defaultSettings, ...settings }
+  if (merged.autoNowPlayingPlayerFilter !== 'qqmusic' && merged.autoNowPlayingPlayerFilter !== 'netease') {
+    merged.autoNowPlayingPlayerFilter = defaultSettings.autoNowPlayingPlayerFilter
+  }
+  return merged
+}
 export function loadSettings(): VisualizerSettings {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (!raw) return defaultSettings
     const parsed = JSON.parse(raw) as Partial<VisualizerSettings>
-    return { ...defaultSettings, ...parsed }
+    return normalizeSettings(parsed)
   } catch {
     return defaultSettings
   }
@@ -24,7 +31,7 @@ export async function loadBridgeSettings(baseUrl: string): Promise<VisualizerSet
     if (!response.ok) return null
     const payload = (await response.json()) as { config?: Partial<VisualizerSettings> }
     if (!payload.config) return null
-    const merged = { ...defaultSettings, ...payload.config }
+    const merged = normalizeSettings(payload.config)
     saveSettings(merged)
     return merged
   } catch {
@@ -42,7 +49,7 @@ export async function saveBridgeSettings(baseUrl: string, settings: VisualizerSe
     if (!response.ok) return null
     const payload = (await response.json()) as { config?: Partial<VisualizerSettings> }
     if (!payload.config) return null
-    return { ...defaultSettings, ...payload.config }
+    return normalizeSettings(payload.config)
   } catch {
     return null
   }
@@ -91,3 +98,4 @@ export async function fetchWithTimeout(input: RequestInfo | URL, timeoutMs: numb
     window.clearTimeout(timer)
   }
 }
+

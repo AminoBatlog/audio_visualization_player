@@ -55,6 +55,10 @@ function Test-PlayerMatch {
                 $candidate.Contains('qq music') -or
                 $candidate.Contains('tencent')
         }
+        'netease' {
+            return $candidate.Contains('cloudmusic') -or
+                $candidate.Contains('netease')
+        }
         default {
             return $candidate.Contains($normalizedFilter)
         }
@@ -125,6 +129,38 @@ function Get-AccentHue {
     }
 }
 
+function New-ArtPayload {
+    param(
+        [byte[]]$Bytes,
+        [string]$ArtSource = ''
+    )
+
+    if ($null -eq $Bytes -or $Bytes.Length -eq 0) {
+        return $null
+    }
+
+    $mimeType = 'image/jpeg'
+    $signature = [System.BitConverter]::ToString($Bytes, 0, [Math]::Min(8, $Bytes.Length))
+    if ($signature.StartsWith('89-50-4E-47')) {
+        $mimeType = 'image/png'
+    } elseif ($signature.StartsWith('52-49-46-46')) {
+        $mimeType = 'image/webp'
+    }
+
+    $sha1 = [System.Security.Cryptography.SHA1]::Create()
+    try {
+        return [ordered]@{
+            art_data_url = 'data:{0};base64,{1}' -f $mimeType, [Convert]::ToBase64String($Bytes)
+            art_mime_type = $mimeType
+            art_hash = [System.BitConverter]::ToString($sha1.ComputeHash($Bytes)).Replace('-', '').ToLowerInvariant()
+            accent_hue = Get-AccentHue -Bytes $Bytes
+            art_source = $ArtSource
+        }
+    } finally {
+        $sha1.Dispose()
+    }
+}
+
 function Get-ThumbnailBytes {
     param($ThumbnailReference)
 
@@ -146,6 +182,43 @@ function Get-ThumbnailBytes {
         $memory.Dispose()
         $netStream.Dispose()
         $stream.Dispose()
+    }
+}
+
+function Get-WindowTrackInfo {
+    param([string]$WindowTitle)
+
+    $title = Normalize-Text $WindowTitle
+    $songTitle = $title
+    $artist = ''
+    if ($title -match '^(?<song>.+?)\s+-\s+(?<artist>.+)$') {
+        $songTitle = $Matches.song.Trim()
+        $artist = $Matches.artist.Trim()
+    }
+
+    return [ordered]@{
+        title = $songTitle
+        artist = $artist
+    }
+}
+
+function Get-UrlBytes {
+    param([string]$Url)
+
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        return $null
+    }
+
+    try {
+        $client = New-Object System.Net.WebClient
+        try {
+            $client.Headers.Add('User-Agent', 'audio-player-helper')
+            return $client.DownloadData($Url)
+        } finally {
+            $client.Dispose()
+        }
+    } catch {
+        return $null
     }
 }
 
@@ -187,43 +260,88 @@ function Get-QQMusicCachedArtwork {
     ) | Where-Object { $null -ne $_ }
 
     foreach ($candidate in $candidates) {
-        $ageSeconds = ([DateTime]::Now - $candidate.LastWriteTime).TotalSeconds
-        if ($ageSeconds -gt 900) {
-            continue
-        }
-
         try {
             $bytes = [System.IO.File]::ReadAllBytes($candidate.FullName)
             if ($null -eq $bytes -or $bytes.Length -eq 0) {
                 continue
             }
-
-            $mimeType = 'image/jpeg'
-            $signature = [System.BitConverter]::ToString($bytes, 0, [Math]::Min(8, $bytes.Length))
-            if ($signature.StartsWith('89-50-4E-47')) {
-                $mimeType = 'image/png'
-            } elseif ($signature.StartsWith('52-49-46-46')) {
-                $mimeType = 'image/webp'
-            }
-
-            $sha1 = [System.Security.Cryptography.SHA1]::Create()
-            try {
-                return [ordered]@{
-                    art_data_url = 'data:{0};base64,{1}' -f $mimeType, [Convert]::ToBase64String($bytes)
-                    art_mime_type = $mimeType
-                    art_hash = [System.BitConverter]::ToString($sha1.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant()
-                    accent_hue = Get-AccentHue -Bytes $bytes
-                    art_source = $candidate.FullName
-                }
-            } finally {
-                $sha1.Dispose()
-            }
+            return New-ArtPayload -Bytes $bytes -ArtSource $candidate.FullName
         } catch {
             continue
         }
     }
 
     return $null
+}
+
+function Get-CloudMusicPlayingListRaw {
+    $path = Join-Path $env:LOCALAPPDATA 'Netease\CloudMusic\webdata\file\playingList'
+    if (-not (Test-Path $path)) {
+        return ''
+    }
+
+    try {
+        return [System.IO.File]::ReadAllText($path)
+    } catch {
+        return ''
+    }
+}
+
+function Get-CloudMusicCoverUrl {
+    param(
+        [string]$Title,
+        [string]$Artist
+    )
+
+    $raw = Get-CloudMusicPlayingListRaw
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        return ''
+    }
+
+    $escapedTitle = [regex]::Escape((Normalize-Text $Title))
+    if ([string]::IsNullOrWhiteSpace($escapedTitle)) {
+        return ''
+    }
+
+    $artistParts = @((Normalize-Text $Artist) -split '/' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $escapedArtist = ''
+    if ($artistParts.Count -gt 0) {
+        $escapedArtist = [regex]::Escape($artistParts[0])
+    }
+
+    $patterns = @()
+    if ($escapedArtist) {
+        $patterns += ('"name":"' + $escapedTitle + '".{0,1200}?"artists":\[(?:(?!\]).)*?"name":"' + $escapedArtist + '"(?:(?!\]).)*?\].{0,2000}?"picUrl":"(?<url>https?://[^"\\]+)"')
+    }
+    $patterns += ('"name":"' + $escapedTitle + '".{0,2400}?"picUrl":"(?<url>https?://[^"\\]+)"')
+
+    foreach ($pattern in $patterns) {
+        $match = [regex]::Match($raw, $pattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+        if ($match.Success) {
+            return (Normalize-Text $match.Groups['url'].Value)
+        }
+    }
+
+    return ''
+}
+
+function Get-CloudMusicArtwork {
+    param(
+        [string]$Title,
+        [string]$Artist
+    )
+
+    $coverUrl = Get-CloudMusicCoverUrl -Title $Title -Artist $Artist
+    if ([string]::IsNullOrWhiteSpace($coverUrl)) {
+        return $null
+    }
+
+    $bytes = Get-UrlBytes -Url $coverUrl
+    if ($null -eq $bytes -or $bytes.Length -eq 0) {
+        return $null
+    }
+
+    return New-ArtPayload -Bytes $bytes -ArtSource $coverUrl
 }
 
 function Get-QQMusicWindowFallback {
@@ -235,21 +353,14 @@ function Get-QQMusicWindowFallback {
         return $null
     }
 
-    $title = Normalize-Text $process.MainWindowTitle
-    $songTitle = $title
-    $artist = ''
-    if ($title -match '^(?<song>.+?)\s+-\s+(?<artist>.+)$') {
-        $songTitle = $Matches.song.Trim()
-        $artist = $Matches.artist.Trim()
-    }
-
+    $trackInfo = Get-WindowTrackInfo -WindowTitle $process.MainWindowTitle
     $cachedArtwork = Get-QQMusicCachedArtwork
     return [ordered]@{
         active = $true
         matched_player = $true
         source_app_id = 'QQMusic.exe'
-        title = $songTitle
-        artist = $artist
+        title = $trackInfo.title
+        artist = $trackInfo.artist
         album_title = ''
         art_data_url = if ($null -ne $cachedArtwork) { $cachedArtwork.art_data_url } else { $null }
         art_mime_type = if ($null -ne $cachedArtwork) { $cachedArtwork.art_mime_type } else { $null }
@@ -260,6 +371,58 @@ function Get-QQMusicWindowFallback {
             'windows media session unavailable; using QQMusic window title + local artwork cache fallback'
         } else {
             'windows media session unavailable; using QQMusic window title fallback'
+        }
+    }
+}
+
+function Get-CloudMusicWindowFallback {
+    $process = Get-Process cloudmusic -ErrorAction SilentlyContinue |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_.MainWindowTitle) } |
+        Select-Object -First 1
+
+    if ($null -eq $process) {
+        return $null
+    }
+
+    $trackInfo = Get-WindowTrackInfo -WindowTitle $process.MainWindowTitle
+    $artwork = $null
+    if (-not [string]::IsNullOrWhiteSpace($trackInfo.title)) {
+        $artwork = Get-CloudMusicArtwork -Title $trackInfo.title -Artist $trackInfo.artist
+    }
+
+    return [ordered]@{
+        active = $true
+        matched_player = $true
+        source_app_id = 'cloudmusic.exe'
+        title = $trackInfo.title
+        artist = $trackInfo.artist
+        album_title = ''
+        art_data_url = if ($null -ne $artwork) { $artwork.art_data_url } else { $null }
+        art_mime_type = if ($null -ne $artwork) { $artwork.art_mime_type } else { $null }
+        art_hash = if ($null -ne $artwork) { $artwork.art_hash } else { $null }
+        accent_hue = if ($null -ne $artwork) { $artwork.accent_hue } else { $null }
+        updated_at_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        error = if ($null -ne $artwork) {
+            'windows media session unavailable; using CloudMusic window title + playingList artwork fallback'
+        } else {
+            'windows media session unavailable; using CloudMusic window title fallback'
+        }
+    }
+}
+
+function Get-WindowTitleFallback {
+    param([string]$Filter)
+
+    $normalized = (Normalize-Text $Filter).ToLowerInvariant()
+    switch ($normalized) {
+        'qqmusic' {
+            return Get-QQMusicWindowFallback
+        }
+        'netease' {
+            return Get-CloudMusicWindowFallback
+        }
+        default {
+            return $null
         }
     }
 }
@@ -295,7 +458,7 @@ try {
     try {
         $manager = Await-WinRtOperation ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
     } catch {
-        $fallback = Get-QQMusicWindowFallback
+        $fallback = Get-WindowTitleFallback -Filter $PlayerFilter
         if ($null -ne $fallback) {
             $fallback | ConvertTo-Json -Compress
             exit 0
@@ -305,7 +468,7 @@ try {
     }
 
     if ($null -eq $manager) {
-        $fallback = Get-QQMusicWindowFallback
+        $fallback = Get-WindowTitleFallback -Filter $PlayerFilter
         if ($null -ne $fallback) {
             $fallback | ConvertTo-Json -Compress
             exit 0
@@ -316,7 +479,7 @@ try {
 
     $session = $manager.GetCurrentSession()
     if ($null -eq $session) {
-        $fallback = Get-QQMusicWindowFallback
+        $fallback = Get-WindowTitleFallback -Filter $PlayerFilter
         if ($null -ne $fallback) {
             $fallback | ConvertTo-Json -Compress
             exit 0
@@ -337,35 +500,37 @@ try {
 
         $thumbnailBytes = Get-ThumbnailBytes $properties.Thumbnail
         if ($null -ne $thumbnailBytes -and $thumbnailBytes.Length -gt 0) {
-            $mimeType = 'image/jpeg'
-            $signature = [System.BitConverter]::ToString($thumbnailBytes, 0, [Math]::Min(8, $thumbnailBytes.Length))
-            if ($signature.StartsWith('89-50-4E-47')) {
-                $mimeType = 'image/png'
-            } elseif ($signature.StartsWith('52-49-46-46')) {
-                $mimeType = 'image/webp'
-            }
-            $sha1 = [System.Security.Cryptography.SHA1]::Create()
-            try {
-                $result.art_mime_type = $mimeType
-                $result.art_hash = [System.BitConverter]::ToString($sha1.ComputeHash($thumbnailBytes)).Replace('-', '').ToLowerInvariant()
-                $result.art_data_url = 'data:{0};base64,{1}' -f $mimeType, [Convert]::ToBase64String($thumbnailBytes)
-                $result.accent_hue = Get-AccentHue -Bytes $thumbnailBytes
-            } finally {
-                $sha1.Dispose()
-            }
+            $artPayload = New-ArtPayload -Bytes $thumbnailBytes -ArtSource 'media-session-thumbnail'
+            $result.art_mime_type = $artPayload.art_mime_type
+            $result.art_hash = $artPayload.art_hash
+            $result.art_data_url = $artPayload.art_data_url
+            $result.accent_hue = $artPayload.accent_hue
+        }
+    }
+
+    if (-not $result.matched_player) {
+        $fallback = Get-WindowTitleFallback -Filter $PlayerFilter
+        if ($null -ne $fallback) {
+            $fallback | ConvertTo-Json -Compress
+            exit 0
         }
     }
 
     $result.active = $result.matched_player -and -not [string]::IsNullOrWhiteSpace($result.title)
     if (-not $result.matched_player) {
-        $result.error = 'current media session is not QQ Music'
+        $result.error = 'current media session is not the selected player'
     } elseif (-not $result.art_data_url) {
-        $result.error = 'matched QQ Music session has no artwork'
+        $fallback = Get-WindowTitleFallback -Filter $PlayerFilter
+        if ($null -ne $fallback -and $fallback.art_data_url) {
+            $fallback | ConvertTo-Json -Compress
+            exit 0
+        }
+        $result.error = 'matched player has no artwork'
     }
 
     $result | ConvertTo-Json -Compress
 } catch {
-    $fallback = Get-QQMusicWindowFallback
+    $fallback = Get-WindowTitleFallback -Filter $PlayerFilter
     if ($null -ne $fallback) {
         $fallback | ConvertTo-Json -Compress
         exit 0

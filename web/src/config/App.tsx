@@ -48,7 +48,7 @@ function formatNowPlayingLabel(nowPlaying: NowPlayingState): string {
   if (nowPlaying.error) {
     return nowPlaying.error
   }
-  return 'No QQ Music track detected'
+  return 'No supported music track detected'
 }
 
 const defaultHelperState: BridgeHelperState = {
@@ -270,10 +270,17 @@ export function ConfigApp() {
 
             <div style={{ marginTop: 18, padding: 16, borderRadius: 18, background: 'rgba(6, 20, 28, 0.36)', border: '1px solid rgba(204, 235, 247, 0.10)', display: 'grid', gap: 12 }}>
               <label style={{ ...labelStyle, gridTemplateColumns: '1fr auto', alignItems: 'center' }}>
-                <span>Auto QQ Music Cover + Tone</span>
+                <span>Auto Music Cover + Tone</span>
                 <input type="checkbox" checked={settings.autoNowPlayingEnabled} onChange={(event) => void patch({ autoNowPlayingEnabled: event.target.checked })} style={{ width: 18, height: 18 }} />
               </label>
-              <div style={{ color: '#aac7d6', fontSize: 13, lineHeight: 1.6 }}>通过 Windows 系统媒体会话识别 QQ 音乐当前歌曲，自动切换中心封面和主色调。拿不到封面时会回退到当前默认中心图。</div>
+              <label style={labelStyle}>
+                Player Filter
+                <select value={settings.autoNowPlayingPlayerFilter} onChange={(event) => void patch({ autoNowPlayingPlayerFilter: event.target.value as VisualizerSettings['autoNowPlayingPlayerFilter'] })} style={inputStyle}>
+                  <option value="qqmusic">QQ Music only</option>
+                  <option value="netease">CloudMusic only</option>
+                </select>
+              </label>
+              <div style={{ color: '#aac7d6', fontSize: 13, lineHeight: 1.6 }}>通过 Windows 系统媒体会话识别你当前选择的播放器，自动切换中心封面和主色调。当前模式不会同时检测两个播放器。</div>
               <div style={{ color: '#dff3fb', fontSize: 14 }}>{formatNowPlayingLabel(nowPlaying)}</div>
               <div style={{ color: '#7da1b2', fontSize: 12, wordBreak: 'break-all' }}>Source: {nowPlaying.sourceAppId || 'N/A'}</div>
             </div>
@@ -339,3 +346,5 @@ const codeStyle: CSSProperties = { display: 'block', padding: '14px 16px', borde
 const buttonStyle: CSSProperties = { padding: '12px 18px', borderRadius: 999, border: '1px solid rgba(201, 237, 251, 0.12)', background: 'rgba(255, 255, 255, 0.08)', color: '#eef8ff', cursor: 'pointer' }
 const buttonLinkStyle: CSSProperties = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 'fit-content', padding: '12px 18px', borderRadius: 999, border: '1px solid rgba(201, 237, 251, 0.12)', background: 'rgba(255, 255, 255, 0.08)', color: '#eef8ff', textDecoration: 'none' }
 const previewOrbStyle: CSSProperties = { width: 170, height: 170, borderRadius: '50%', overflow: 'hidden', border: '1px solid rgba(218, 244, 255, 0.22)', boxShadow: '0 12px 32px rgba(0, 0, 0, 0.25), 0 0 40px rgba(105, 228, 255, 0.18)', background: 'radial-gradient(circle, rgba(204,239,255,0.24), rgba(204,239,255,0.03))' }
+
+

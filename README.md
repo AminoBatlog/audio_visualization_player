@@ -8,7 +8,7 @@
 - 环形频谱可视化
 - 配置页实时调参
 - 自定义中心图
-- QQ 音乐当前歌曲识别
+- QQ 音乐 / 网易云音乐当前歌曲识别
 - 自动使用歌曲封面作为中心图
 - 自动从封面提取主色调
 
@@ -17,7 +17,7 @@
 - Windows
 - Python 3.10+
 - Node.js
-- QQ 音乐桌面版（如果要用自动封面）
+- QQ 音乐桌面版或网易云音乐桌面版（如果要用自动封面）
 
 ## Quick Start
 
@@ -74,13 +74,18 @@ http://127.0.0.1:5173/visualizer.html
 - HTTP: `127.0.0.1:8765`
 - WebSocket: `127.0.0.1:8766`
 
-## QQ Music Auto Cover
+## Auto Music Cover
 
-配置页中开启 `Auto QQ Music Cover + Tone` 后：
+配置页中开启 `Auto Music Cover + Tone` 后：
 
-- bridge 会识别当前 QQ 音乐歌曲
+- bridge 会按配置页里的 `Player Filter` 识别当前播放器
+- 当前支持：
+  - `QQ Music only`
+  - `CloudMusic only`
 - 优先读取系统媒体会话
-- 如果系统媒体会话拿不到封面，会回退到 QQ 音乐本地缓存封面
+- 如果系统媒体会话拿不到封面：
+  - QQ 音乐会回退到本地缓存封面
+  - 网易云音乐会回退到窗口标题和 `playingList` 中的封面地址
 - 成功时自动替换中心图和色调
 - 失败时回退到你手动配置的默认中心图和 `Accent Hue`
 

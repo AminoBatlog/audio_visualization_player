@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
@@ -20,7 +20,7 @@ from src.audio import AudioDevice, create_audio_source, list_output_devices
 
 CONFIG_PATH = Path(__file__).resolve().parent / 'bridge_visualizer_settings.json'
 NOW_PLAYING_HELPER_PATH = Path(__file__).resolve().parent / 'tools' / 'windows_media_session.ps1'
-BRIDGE_VERSION = '2026-03-13.qqmusic.2'
+BRIDGE_VERSION = '2026-03-13.music-select.1'
 DEFAULT_BRIDGE_CONFIG: dict[str, Any] = {
     'audioSource': 'python-bridge',
     'sensitivity': 1.15,
@@ -123,6 +123,8 @@ class SpectrumBridge:
             next_config = {**self._visualizer_config, **partial}
             next_config['pythonBridgeDeviceId'] = str(next_config.get('pythonBridgeDeviceId') or self._selected_device_id)
             next_config['pythonBridgeUrl'] = str(next_config.get('pythonBridgeUrl') or 'http://127.0.0.1:8765')
+            if next_config.get('autoNowPlayingPlayerFilter') not in {'qqmusic', 'netease'}:
+                next_config['autoNowPlayingPlayerFilter'] = 'qqmusic'
             next_config.pop('config_revision', None)
             self._visualizer_config = next_config
             self._config_revision += 1
@@ -204,6 +206,8 @@ class SpectrumBridge:
             with self._lock:
                 enabled = bool(self._visualizer_config.get('autoNowPlayingEnabled', False))
                 player_filter = str(self._visualizer_config.get('autoNowPlayingPlayerFilter') or 'qqmusic')
+                if player_filter not in {'qqmusic', 'netease'}:
+                    player_filter = 'qqmusic'
             if not enabled:
                 with self._lock:
                     self._now_playing = dict(DEFAULT_NOW_PLAYING_STATE)
@@ -309,7 +313,10 @@ class SpectrumBridge:
             data = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError):
             return dict(DEFAULT_BRIDGE_CONFIG)
-        return {**DEFAULT_BRIDGE_CONFIG, **data}
+        merged = {**DEFAULT_BRIDGE_CONFIG, **data}
+        if merged.get('autoNowPlayingPlayerFilter') not in {'qqmusic', 'netease'}:
+            merged['autoNowPlayingPlayerFilter'] = DEFAULT_BRIDGE_CONFIG['autoNowPlayingPlayerFilter']
+        return merged
 
     def _save_config(self) -> None:
         payload = dict(self._visualizer_config)
@@ -560,3 +567,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
