@@ -1,85 +1,63 @@
 # Audio Ring Visualizer
 
-项目现在包含两条线：
+一个基于 `Python Bridge + Web Visualizer` 的 Windows 音频波形项目，适合本地预览和 OBS Browser Source 使用。
 
-- `Python Bridge`：负责 Windows 输出设备枚举、系统音频 loopback 采集、共享配置存储、当前歌曲元数据同步，以及 WebSocket 频谱推送
-- `Web 版本`：负责透明背景可视化和配置页面，并作为 OBS Browser Source 的主要入口
+当前项目支持：
 
-## Main Entry Points
+- 系统输出设备音频采集
+- 环形频谱可视化
+- 配置页实时调参
+- 自定义中心图
+- QQ 音乐当前歌曲识别
+- 自动使用歌曲封面作为中心图
+- 自动从封面提取主色调
 
-前端工程在 [web](./web) 目录。
+## Requirements
 
-主要页面：
+- Windows
+- Python 3.10+
+- Node.js
+- QQ 音乐桌面版（如果要用自动封面）
 
-- `web/visualizer.html`
-- `web/config.html`
+## Quick Start
 
-本地 bridge 服务入口：
-
-- `bridge_server.py`
-
-当前歌曲元数据 helper：
-
-- `tools/windows_media_session.ps1`
-
-## Current Features
-
-当前 Web 版本已包含：
-
-- 透明背景环形可视化页面
-- 玻璃质感光柱风格
-- 中心图片自定义
-- 检测到音频时图片旋转
-- 配置页
-- 本地配置持久化
-- 共享 bridge 配置持久化
-- `Python Bridge` WebSocket 频谱推送
-- 音频源选择
-  - `Demo Signal`
-  - `Microphone`
-  - `Audio File`
-  - `Python Bridge`
-- Python bridge 输出设备选择
-- QQ 音乐自动封面与自动主色调
-  - 通过 Windows 系统媒体会话识别当前 QQ 音乐歌曲
-  - 自动将封面作为中心图
-  - 自动从封面提取主色调并覆盖可视化 `accentHue`
-  - 未识别到 QQ 音乐或无封面时回退到默认中心图和手动色调
-
-## One-Click Start
-
-推荐直接使用：
+推荐直接运行：
 
 ```bat
 start_all.bat
 ```
 
-它会自动：
+它会：
 
 - 启动 Python bridge
-- 启动 Web 开发服务
+- 启动 Web dev server
 - 打开配置页
 
-OBS Browser Source 使用地址：
+启动后常用地址：
+
+- 配置页：`http://127.0.0.1:5173/config.html`
+- 可视化页：`http://127.0.0.1:5173/visualizer.html`
+- Bridge：`http://127.0.0.1:8765`
+
+## OBS
+
+OBS `Browser Source` 直接使用：
 
 ```text
 http://127.0.0.1:5173/visualizer.html
 ```
 
-## Start Python Bridge
+## Main Files
 
-```bat
-start_bridge.bat
-```
+- `bridge_server.py`：Python bridge 主服务
+- `tools/windows_media_session.ps1`：当前歌曲和封面 helper
+- `web/config.html`：配置页入口
+- `web/visualizer.html`：可视化页入口
+- `start_all.bat`：单窗口启动面板
 
-默认监听：
+## Python Bridge
 
-```text
-HTTP: http://127.0.0.1:8765
-WS:   ws://127.0.0.1:8766
-```
-
-接口包括：
+默认接口：
 
 - `GET /health`
 - `GET /devices`
@@ -89,77 +67,43 @@ WS:   ws://127.0.0.1:8766
 - `POST /config`
 - `GET /spectrum?bars=72`
 - `POST /device`
-- `WebSocket /` 频谱推送
+- `WS /`
+
+默认端口：
+
+- HTTP: `127.0.0.1:8765`
+- WebSocket: `127.0.0.1:8766`
+
+## QQ Music Auto Cover
+
+配置页中开启 `Auto QQ Music Cover + Tone` 后：
+
+- bridge 会识别当前 QQ 音乐歌曲
+- 优先读取系统媒体会话
+- 如果系统媒体会话拿不到封面，会回退到 QQ 音乐本地缓存封面
+- 成功时自动替换中心图和色调
+- 失败时回退到你手动配置的默认中心图和 `Accent Hue`
 
 说明：
 
-- `config.html` 会把设置同步到 bridge
-- `visualizer.html` 会优先从 bridge 拉共享配置
-- `visualizer.html` 会定时读取 `/now-playing`，在自动模式开启时覆盖中心图和主色调
-- `Python Bridge` 模式优先使用 WebSocket 推送，失败时回退到 HTTP 读取
-- OBS Browser Source 不再依赖普通浏览器的 `localStorage`
+- 歌曲识别和封面更新是轮询方式，不是即时推送，所以切歌时会有轻微延迟
+- 如果修改了 `bridge_server.py` 或 `tools/windows_media_session.ps1`，需要重启 bridge
 
-如果你修改过 `bridge_server.py` 或 `tools/windows_media_session.ps1`，要先重启 bridge，OBS 才会拿到新接口。
+## Manual Start
 
-## QQ Music Auto Mode
+只启动 bridge：
 
-配置页里新增了 `Auto QQ Music Cover + Tone` 开关。
+```bat
+start_bridge.bat
+```
 
-行为规则：
-
-- 关闭时：始终使用你手动保存的中心图和 `Accent Hue`
-- 开启时：如果当前系统媒体会话识别到 QQ 音乐歌曲，则自动使用歌曲封面和封面主色调
-- 没有识别到 QQ 音乐或封面缺失时：自动回退到默认中心图和手动色调
-
-注意：
-
-- 当前实现依赖 `Windows PowerShell 5.1` + Windows 系统媒体会话
-- 只对识别为 QQ 音乐的媒体会话生效，不会默认接管其他播放器
-- 如果你的系统没有可用的系统媒体会话服务，`/now-playing` 会返回不可用状态，但不会影响音频频谱功能
-
-## Run Web Version
-
-单独启动 Web 开发模式：
+只启动 Web：
 
 ```bat
 start_web_dev.bat
 ```
 
-或手动：
+## Notes
 
-```powershell
-cd web
-& 'C:\Program Files\nodejs\node.exe' 'C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js' install
-& 'C:\Program Files\nodejs\node.exe' .\node_modules\vite\bin\vite.js
-```
-
-构建：
-
-```powershell
-cd web
-& 'C:\Program Files\nodejs\node.exe' .\node_modules\vite\bin\vite.js build
-```
-
-## Recommended Workflow
-
-本地使用和 OBS 接入建议按这个顺序：
-
-1. 关闭旧的 bridge 进程
-2. 运行 `start_all.bat`
-3. 在配置页中设置 `Python Bridge` 输出设备和视觉参数
-4. 需要自动封面时，打开 `Auto QQ Music Cover + Tone`
-5. 在 QQ 音乐中开始播放歌曲
-6. 在 OBS 中加载 `http://127.0.0.1:5173/visualizer.html` 作为 `Browser Source`
-
-## OBS Direction
-
-当前推荐接入方式：
-
-- 使用 OBS `Browser Source`
-- 加载开发环境中的 `visualizer.html`，或构建后的 `web/dist/visualizer.html`
-
-如果后续要进一步增强，可继续做：
-
-- 扩展到非 QQ 音乐播放器
-- bridge 自动发现和自动重连
-- 输出设备热切换状态提示
+- `start_all.bat` 现在是单窗口控制面板，支持重启、开日志、重新打开配置页和退出
+- `.codex`、`.venv`、`start_codex.bat` 不会进入 git
