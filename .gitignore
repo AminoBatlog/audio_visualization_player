@@ -1,0 +1,9 @@
+.codex/
+.venv/
+start_codex.bat
+__pycache__/
+*.py[cod]
+web/node_modules/
+web/dist/
+bridge_visualizer_settings.json
+settings.json
