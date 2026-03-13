@@ -1,6 +1,6 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react'
-import { loadBridgeSettings, loadSettings, normalizeBridgeUrl, subscribeSettings } from '../shared/storage'
-import type { AudioSourceType, VisualizerSettings } from '../shared/types'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { loadBridgeSettings, loadNowPlaying, loadSettings, normalizeBridgeUrl, subscribeSettings } from '../shared/storage'
+import { defaultNowPlayingState, type AudioSourceType, type NowPlayingState, type VisualizerSettings } from '../shared/types'
 
 interface AudioFrame {
   levels: number[]
@@ -87,6 +87,17 @@ function bridgeWebSocketUrl(httpUrl: string): string {
   url.pathname = '/'
   url.search = ''
   return url.toString()
+}
+
+function getEffectiveSettings(settings: VisualizerSettings, nowPlaying: NowPlayingState): VisualizerSettings {
+  if (!settings.autoNowPlayingEnabled || !nowPlaying.active) {
+    return settings
+  }
+  return {
+    ...settings,
+    centerImageDataUrl: nowPlaying.centerImageDataUrl || settings.centerImageDataUrl,
+    accentHue: nowPlaying.accentHue ?? settings.accentHue,
+  }
 }
 
 function renderFrame(canvas: HTMLCanvasElement, settings: VisualizerSettings, frame: AudioFrame, image: HTMLImageElement | null, rotationRef: { current: number }) {
@@ -211,18 +222,25 @@ function renderFrame(canvas: HTMLCanvasElement, settings: VisualizerSettings, fr
 
 export function VisualizerApp() {
   const [settings, setSettings] = useState(() => loadSettings())
+  const [nowPlaying, setNowPlaying] = useState(defaultNowPlayingState)
   const [statusText, setStatusText] = useState('Loading')
-  const image = useCenterImage(settings.centerImageDataUrl)
+  const effectiveSettings = useMemo(() => getEffectiveSettings(settings, nowPlaying), [settings, nowPlaying])
+  const image = useCenterImage(effectiveSettings.centerImageDataUrl)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const rotationRef = useRef(0)
   const audioFrameRef = useRef<AudioFrame>({ ...DEFAULT_AUDIO, levels: new Array(settings.barCount).fill(0) })
   const smoothedLevelsRef = useRef<number[]>(new Array(settings.barCount).fill(0))
   const settingsRef = useRef(settings)
+  const effectiveSettingsRef = useRef(effectiveSettings)
   const revisionRef = useRef(settings.config_revision ?? 0)
 
   useEffect(() => {
     settingsRef.current = settings
   }, [settings])
+
+  useEffect(() => {
+    effectiveSettingsRef.current = effectiveSettings
+  }, [effectiveSettings])
 
   useEffect(() => {
     const stop = subscribeSettings((next) => {
@@ -253,6 +271,18 @@ export function VisualizerApp() {
       stop()
       window.clearInterval(timer)
     }
+  }, [])
+
+  useEffect(() => {
+    const syncNowPlaying = async () => {
+      const next = await loadNowPlaying(settingsRef.current.pythonBridgeUrl)
+      setNowPlaying(next ?? defaultNowPlayingState)
+    }
+    void syncNowPlaying()
+    const timer = window.setInterval(() => {
+      void syncNowPlaying()
+    }, 4000)
+    return () => window.clearInterval(timer)
   }, [])
 
   useEffect(() => {
@@ -333,7 +363,6 @@ export function VisualizerApp() {
             body: JSON.stringify({ device_id: currentSettings.pythonBridgeDeviceId }),
           })
         } catch {
-          // keep recovery path alive
         }
       }
 
@@ -357,7 +386,6 @@ export function VisualizerApp() {
             const payload = JSON.parse(String(event.data)) as { levels?: number[]; status?: string; sequence?: number; timestamp_ms?: number }
             setFrame(payload.levels ?? audioFrameRef.current.levels, payload.status ?? 'Python bridge websocket', payload.sequence ?? audioFrameRef.current.sequence, payload.timestamp_ms ?? Date.now())
           } catch {
-            // ignore malformed frames
           }
         }
         webSocket.onerror = () => {
@@ -442,7 +470,7 @@ export function VisualizerApp() {
     const loop = () => {
       const canvas = canvasRef.current
       if (canvas) {
-        renderFrame(canvas, settingsRef.current, audioFrameRef.current, image, rotationRef)
+        renderFrame(canvas, effectiveSettingsRef.current, audioFrameRef.current, image, rotationRef)
       }
       statusCounter += 1
       if (statusCounter >= 15) {
@@ -455,14 +483,15 @@ export function VisualizerApp() {
     return () => cancelAnimationFrame(animationFrame)
   }, [image])
 
-  const accent = useMemo(() => `hsla(${settings.accentHue}, 95%, 78%, 0.85)`, [settings.accentHue])
+  const accent = useMemo(() => `hsla(${effectiveSettings.accentHue}, 95%, 78%, 0.85)`, [effectiveSettings.accentHue])
+  const nowPlayingLabel = nowPlaying.active ? `${nowPlaying.title || 'Unknown Title'} - ${nowPlaying.artist || 'Unknown Artist'}` : statusText
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative', background: 'transparent' }}>
       <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
       <div style={{ position: 'absolute', left: 20, bottom: 18, padding: '10px 14px', color: '#dff7ff', background: 'rgba(5, 16, 24, 0.3)', border: '1px solid rgba(200, 240, 255, 0.14)', borderRadius: 16, backdropFilter: 'blur(16px)', boxShadow: '0 12px 32px rgba(0, 0, 0, 0.18)' }}>
         <div style={{ fontSize: 12, letterSpacing: '0.16em', textTransform: 'uppercase', color: accent }}>Audio Ring</div>
-        <div style={{ fontSize: 13, marginTop: 4 }}>{statusText}</div>
+        <div style={{ fontSize: 13, marginTop: 4 }}>{nowPlayingLabel}</div>
       </div>
       <a href="./config.html" style={{ position: 'absolute', right: 20, bottom: 18, textDecoration: 'none', color: '#f2fbff', background: 'rgba(5, 16, 24, 0.35)', border: '1px solid rgba(200, 240, 255, 0.15)', borderRadius: 999, padding: '10px 16px', backdropFilter: 'blur(14px)' }}>
         Configure

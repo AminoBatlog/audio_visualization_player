@@ -1,4 +1,4 @@
-﻿export type AudioSourceType = 'demo' | 'microphone' | 'audio-file' | 'python-bridge'
+export type AudioSourceType = 'demo' | 'microphone' | 'audio-file' | 'python-bridge'
 
 export interface VisualizerSettings {
   audioSource: AudioSourceType
@@ -18,6 +18,11 @@ export interface VisualizerSettings {
   audioFileDataUrl: string
   pythonBridgeUrl: string
   pythonBridgeDeviceId: string
+  autoNowPlayingEnabled: boolean
+  autoNowPlayingProvider: 'windows-media-session'
+  autoNowPlayingPlayerFilter: 'qqmusic'
+  autoNowPlayingFallbackImage: 'default-center-image'
+  bridge_version?: string
   config_revision?: number
 }
 
@@ -27,6 +32,26 @@ export interface BridgeDevice {
   kind: string
   available: boolean
   is_default: boolean
+}
+
+export interface NowPlayingState {
+  active: boolean
+  matchedPlayer: boolean
+  sourceAppId: string
+  title: string
+  artist: string
+  albumTitle: string
+  centerImageDataUrl: string
+  accentHue: number | null
+  artHash: string
+  updatedAtMs: number
+  error: string
+}
+
+export interface BridgeHelperState {
+  script_exists: boolean
+  script_path: string
+  last_error: string
 }
 
 export const defaultSettings: VisualizerSettings = {
@@ -47,5 +72,24 @@ export const defaultSettings: VisualizerSettings = {
   audioFileDataUrl: '',
   pythonBridgeUrl: 'http://127.0.0.1:8765',
   pythonBridgeDeviceId: '',
+  autoNowPlayingEnabled: false,
+  autoNowPlayingProvider: 'windows-media-session',
+  autoNowPlayingPlayerFilter: 'qqmusic',
+  autoNowPlayingFallbackImage: 'default-center-image',
+  bridge_version: '',
   config_revision: 0,
+}
+
+export const defaultNowPlayingState: NowPlayingState = {
+  active: false,
+  matchedPlayer: false,
+  sourceAppId: '',
+  title: '',
+  artist: '',
+  albumTitle: '',
+  centerImageDataUrl: '',
+  accentHue: null,
+  artHash: '',
+  updatedAtMs: 0,
+  error: '',
 }

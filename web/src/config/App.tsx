@@ -1,6 +1,6 @@
-﻿import { type CSSProperties, type ChangeEvent, useEffect, useMemo, useState } from 'react'
-import { fetchWithTimeout, loadBridgeSettings, loadSettings, normalizeBridgeUrl, saveBridgeSettings, saveSettings } from '../shared/storage'
-import { defaultSettings, type AudioSourceType, type BridgeDevice, type VisualizerSettings } from '../shared/types'
+import { type CSSProperties, type ChangeEvent, useEffect, useMemo, useState } from 'react'
+import { fetchWithTimeout, loadBridgeSettings, loadNowPlaying, loadSettings, normalizeBridgeUrl, saveBridgeSettings, saveSettings } from '../shared/storage'
+import { defaultNowPlayingState, defaultSettings, type AudioSourceType, type BridgeDevice, type BridgeHelperState, type NowPlayingState, type VisualizerSettings } from '../shared/types'
 
 function Slider(props: { label: string; min: number; max: number; step: number; value: number; onChange: (value: number) => void }) {
   return (
@@ -41,11 +41,30 @@ function bridgeCandidates(rawUrl: string): string[] {
   return [...new Set(candidates)]
 }
 
+function formatNowPlayingLabel(nowPlaying: NowPlayingState): string {
+  if (nowPlaying.active) {
+    return `${nowPlaying.title || 'Unknown Title'} - ${nowPlaying.artist || 'Unknown Artist'}`
+  }
+  if (nowPlaying.error) {
+    return nowPlaying.error
+  }
+  return 'No QQ Music track detected'
+}
+
+const defaultHelperState: BridgeHelperState = {
+  script_exists: false,
+  script_path: '',
+  last_error: '',
+}
+
 export function ConfigApp() {
   const [settings, setSettings] = useState<VisualizerSettings>(() => loadSettings())
   const [bridgeDevices, setBridgeDevices] = useState<BridgeDevice[]>([])
   const [bridgeStatus, setBridgeStatus] = useState('Bridge idle')
   const [bridgeDebug, setBridgeDebug] = useState('')
+  const [bridgeVersion, setBridgeVersion] = useState('unknown')
+  const [bridgeHelper, setBridgeHelper] = useState<BridgeHelperState>(defaultHelperState)
+  const [nowPlaying, setNowPlaying] = useState<NowPlayingState>(defaultNowPlayingState)
   const obsHint = useMemo(() => `${window.location.origin}${window.location.pathname.replace('config.html', 'visualizer.html')}`, [])
 
   const patch = async (partial: Partial<VisualizerSettings>) => {
@@ -70,7 +89,12 @@ export function ConfigApp() {
       try {
         const response = await fetchWithTimeout(`${candidate}/state`, 8000)
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const payload = (await response.json()) as { device_id?: string; devices?: BridgeDevice[] }
+        const payload = (await response.json()) as {
+          bridge_version?: string
+          device_id?: string
+          devices?: BridgeDevice[]
+          now_playing_helper?: BridgeHelperState
+        }
         return { candidate, payload }
       } catch (error) {
         lastError = `${candidate}/state -> ${formatBridgeError(error)}`
@@ -85,6 +109,8 @@ export function ConfigApp() {
       const { candidate, payload } = await tryBridgeState(baseUrl)
       const devices = payload.devices ?? []
       setBridgeDevices(devices)
+      setBridgeVersion(payload.bridge_version || 'unknown')
+      setBridgeHelper(payload.now_playing_helper ?? defaultHelperState)
       setBridgeStatus(devices.length ? 'Bridge connected' : 'Bridge connected, no devices')
       setBridgeDebug(`state ok: ${candidate}/state`)
       if (normalizeBridgeUrl(settings.pythonBridgeUrl) !== candidate) {
@@ -99,9 +125,22 @@ export function ConfigApp() {
       }
     } catch (error) {
       setBridgeDevices([])
+      setBridgeVersion('unknown')
+      setBridgeHelper(defaultHelperState)
       setBridgeStatus(formatBridgeError(error))
       setBridgeDebug(String(error))
     }
+  }
+
+  const refreshNowPlaying = async (baseUrl: string) => {
+    for (const candidate of bridgeCandidates(baseUrl)) {
+      const payload = await loadNowPlaying(candidate)
+      if (payload) {
+        setNowPlaying(payload)
+        return
+      }
+    }
+    setNowPlaying(defaultNowPlayingState)
   }
 
   useEffect(() => {
@@ -113,9 +152,17 @@ export function ConfigApp() {
         setBridgeStatus('Bridge config unavailable, probing state...')
       }
       await refreshBridgeDevices(next.pythonBridgeUrl)
+      await refreshNowPlaying(next.pythonBridgeUrl)
     }
     void initialize()
   }, [])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void refreshNowPlaying(settings.pythonBridgeUrl)
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [settings.pythonBridgeUrl])
 
   const onImageSelect = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -203,7 +250,7 @@ export function ConfigApp() {
             <div style={fieldGrid}>
               <label style={labelStyle}>
                 Bridge URL
-                <input type="text" value={settings.pythonBridgeUrl} onChange={(event) => setSettings({ ...settings, pythonBridgeUrl: event.target.value })} onBlur={async () => { await patch({ pythonBridgeUrl: settings.pythonBridgeUrl }); await refreshBridgeDevices(settings.pythonBridgeUrl) }} style={inputStyle} />
+                <input type="text" value={settings.pythonBridgeUrl} onChange={(event) => setSettings({ ...settings, pythonBridgeUrl: event.target.value })} onBlur={async () => { await patch({ pythonBridgeUrl: settings.pythonBridgeUrl }); await refreshBridgeDevices(settings.pythonBridgeUrl); await refreshNowPlaying(settings.pythonBridgeUrl) }} style={inputStyle} />
               </label>
               <label style={labelStyle}>
                 Output Device
@@ -218,6 +265,18 @@ export function ConfigApp() {
               <button onClick={() => void refreshBridgeDevices(settings.pythonBridgeUrl)} style={buttonStyle}>Test Bridge</button>
             </div>
             <div style={{ marginTop: 10, color: '#7da1b2', fontSize: 12, wordBreak: 'break-all' }}>{bridgeDebug}</div>
+            <div style={{ marginTop: 10, color: '#9bc7d8', fontSize: 12 }}>Bridge Version: {bridgeVersion || 'unknown (likely old bridge process)'}</div>
+            <div style={{ marginTop: 4, color: '#7da1b2', fontSize: 12, wordBreak: 'break-all' }}>Helper: {bridgeHelper.script_exists ? 'script found' : 'script missing'}{bridgeHelper.last_error ? ` | ${bridgeHelper.last_error}` : ''}</div>
+
+            <div style={{ marginTop: 18, padding: 16, borderRadius: 18, background: 'rgba(6, 20, 28, 0.36)', border: '1px solid rgba(204, 235, 247, 0.10)', display: 'grid', gap: 12 }}>
+              <label style={{ ...labelStyle, gridTemplateColumns: '1fr auto', alignItems: 'center' }}>
+                <span>Auto QQ Music Cover + Tone</span>
+                <input type="checkbox" checked={settings.autoNowPlayingEnabled} onChange={(event) => void patch({ autoNowPlayingEnabled: event.target.checked })} style={{ width: 18, height: 18 }} />
+              </label>
+              <div style={{ color: '#aac7d6', fontSize: 13, lineHeight: 1.6 }}>通过 Windows 系统媒体会话识别 QQ 音乐当前歌曲，自动切换中心封面和主色调。拿不到封面时会回退到当前默认中心图。</div>
+              <div style={{ color: '#dff3fb', fontSize: 14 }}>{formatNowPlayingLabel(nowPlaying)}</div>
+              <div style={{ color: '#7da1b2', fontSize: 12, wordBreak: 'break-all' }}>Source: {nowPlaying.sourceAppId || 'N/A'}</div>
+            </div>
           </section>
 
           <section style={panelStyle}>
@@ -260,7 +319,7 @@ export function ConfigApp() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
               <div>
                 <h2 style={sectionTitle}>State</h2>
-                <div style={{ color: '#aac7d6', fontSize: 13 }}>配置会保存到本地浏览器和 Python bridge，共享给 OBS。</div>
+                <div style={{ color: '#aac7d6', fontSize: 13 }}>配置会保存到本地浏览器和 Python bridge，共享给 OBS。自动封面和自动色调属于运行时状态，不会覆盖你手动保存的默认图。</div>
               </div>
               <button onClick={() => void patch(defaultSettings)} style={buttonStyle}>Reset To Defaults</button>
             </div>

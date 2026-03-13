@@ -4,8 +4,10 @@ import argparse
 from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import locale
 import json
 from pathlib import Path
+import subprocess
 import threading
 import time
 from typing import Any
@@ -17,6 +19,8 @@ from src.audio import AudioDevice, create_audio_source, list_output_devices
 
 
 CONFIG_PATH = Path(__file__).resolve().parent / 'bridge_visualizer_settings.json'
+NOW_PLAYING_HELPER_PATH = Path(__file__).resolve().parent / 'tools' / 'windows_media_session.ps1'
+BRIDGE_VERSION = '2026-03-13.qqmusic.2'
 DEFAULT_BRIDGE_CONFIG: dict[str, Any] = {
     'audioSource': 'python-bridge',
     'sensitivity': 1.15,
@@ -35,6 +39,23 @@ DEFAULT_BRIDGE_CONFIG: dict[str, Any] = {
     'audioFileDataUrl': '',
     'pythonBridgeUrl': 'http://127.0.0.1:8765',
     'pythonBridgeDeviceId': '',
+    'autoNowPlayingEnabled': False,
+    'autoNowPlayingProvider': 'windows-media-session',
+    'autoNowPlayingPlayerFilter': 'qqmusic',
+    'autoNowPlayingFallbackImage': 'default-center-image',
+}
+DEFAULT_NOW_PLAYING_STATE: dict[str, Any] = {
+    'active': False,
+    'matchedPlayer': False,
+    'sourceAppId': '',
+    'title': '',
+    'artist': '',
+    'albumTitle': '',
+    'centerImageDataUrl': '',
+    'accentHue': None,
+    'artHash': '',
+    'updatedAtMs': 0,
+    'error': '',
 }
 
 
@@ -53,9 +74,13 @@ class SpectrumBridge:
         self._latest_status = 'Bridge warming up'
         self._latest_timestamp_ms = int(time.time() * 1000)
         self._latest_sequence = 0
+        self._now_playing = dict(DEFAULT_NOW_PLAYING_STATE)
+        self._started_at_ms = int(time.time() * 1000)
         self._running = True
         self._capture_thread = threading.Thread(target=self._capture_loop, name='audio-ring-capture', daemon=True)
+        self._now_playing_thread = threading.Thread(target=self._now_playing_loop, name='audio-ring-now-playing', daemon=True)
         self._capture_thread.start()
+        self._now_playing_thread.start()
         self._save_config()
 
     def list_devices(self) -> list[dict[str, Any]]:
@@ -67,10 +92,22 @@ class SpectrumBridge:
         with self._lock:
             self._devices = list_output_devices()
             return {
+                'bridge_version': BRIDGE_VERSION,
+                'started_at_ms': self._started_at_ms,
                 'device_id': self._selected_device_id,
                 'device': self._serialize_device(self._get_selected_device()),
                 'devices': [self._serialize_device(device) for device in self._devices],
+                'now_playing': dict(self._now_playing),
+                'now_playing_helper': {
+                    'script_exists': NOW_PLAYING_HELPER_PATH.exists(),
+                    'script_path': str(NOW_PLAYING_HELPER_PATH),
+                    'last_error': str(self._now_playing.get('error', '') or ''),
+                },
             }
+
+    def get_now_playing(self) -> dict[str, Any]:
+        with self._lock:
+            return dict(self._now_playing)
 
     def get_config(self) -> dict[str, Any]:
         with self._lock:
@@ -78,6 +115,7 @@ class SpectrumBridge:
             config['pythonBridgeDeviceId'] = self._selected_device_id
             config['pythonBridgeUrl'] = config.get('pythonBridgeUrl') or 'http://127.0.0.1:8765'
             config['config_revision'] = self._config_revision
+            config['bridge_version'] = BRIDGE_VERSION
             return config
 
     def update_config(self, partial: dict[str, Any]) -> dict[str, Any]:
@@ -130,6 +168,7 @@ class SpectrumBridge:
     def close(self) -> None:
         self._running = False
         self._capture_thread.join(timeout=1.5)
+        self._now_playing_thread.join(timeout=1.5)
         with self._lock:
             self._source.close()
 
@@ -159,6 +198,103 @@ class SpectrumBridge:
                     self._latest_status = f'Bridge capture issue: {exc}'
                     self._latest_timestamp_ms = int(time.time() * 1000)
                 time.sleep(0.05)
+
+    def _now_playing_loop(self) -> None:
+        while self._running:
+            with self._lock:
+                enabled = bool(self._visualizer_config.get('autoNowPlayingEnabled', False))
+                player_filter = str(self._visualizer_config.get('autoNowPlayingPlayerFilter') or 'qqmusic')
+            if not enabled:
+                with self._lock:
+                    self._now_playing = dict(DEFAULT_NOW_PLAYING_STATE)
+                time.sleep(1.0)
+                continue
+
+            state = self._read_now_playing(player_filter)
+            with self._lock:
+                self._now_playing = state
+            time.sleep(3.0)
+
+    def _read_now_playing(self, player_filter: str) -> dict[str, Any]:
+        if not NOW_PLAYING_HELPER_PATH.exists():
+            return {
+                **DEFAULT_NOW_PLAYING_STATE,
+                'updatedAtMs': int(time.time() * 1000),
+                'error': 'now playing helper script is missing',
+            }
+        try:
+            completed = subprocess.run(
+                [
+                    'powershell.exe',
+                    '-NoProfile',
+                    '-ExecutionPolicy',
+                    'Bypass',
+                    '-File',
+                    str(NOW_PLAYING_HELPER_PATH),
+                    '-PlayerFilter',
+                    player_filter,
+                ],
+                capture_output=True,
+                timeout=8,
+                check=False,
+            )
+        except FileNotFoundError:
+            return {
+                **DEFAULT_NOW_PLAYING_STATE,
+                'updatedAtMs': int(time.time() * 1000),
+                'error': 'powershell.exe was not found',
+            }
+        except subprocess.TimeoutExpired:
+            return {
+                **DEFAULT_NOW_PLAYING_STATE,
+                'updatedAtMs': int(time.time() * 1000),
+                'error': 'now playing helper timed out',
+            }
+
+        payload_text = _decode_subprocess_output(completed.stdout).strip()
+        if not payload_text:
+            return {
+                **DEFAULT_NOW_PLAYING_STATE,
+                'updatedAtMs': int(time.time() * 1000),
+                'error': (_decode_subprocess_output(completed.stderr) or 'now playing helper returned no data').strip(),
+            }
+        try:
+            payload = json.loads(payload_text)
+        except json.JSONDecodeError:
+            return {
+                **DEFAULT_NOW_PLAYING_STATE,
+                'updatedAtMs': int(time.time() * 1000),
+                'error': f'invalid helper output: {payload_text[:120]}',
+            }
+
+        if not isinstance(payload, dict):
+            return {
+                **DEFAULT_NOW_PLAYING_STATE,
+                'updatedAtMs': int(time.time() * 1000),
+                'error': 'now playing helper returned an invalid payload',
+            }
+
+        accent_raw = payload.get('accent_hue')
+        accent_hue = None
+        if isinstance(accent_raw, int):
+            accent_hue = accent_raw
+        elif isinstance(accent_raw, float):
+            accent_hue = int(accent_raw)
+
+        return {
+            **DEFAULT_NOW_PLAYING_STATE,
+            'active': bool(payload.get('active', False)),
+            'matchedPlayer': bool(payload.get('matched_player', False)),
+            'sourceAppId': str(payload.get('source_app_id', '') or ''),
+            'title': str(payload.get('title', '') or ''),
+            'artist': str(payload.get('artist', '') or ''),
+            'albumTitle': str(payload.get('album_title', '') or ''),
+            'centerImageDataUrl': str(payload.get('art_data_url', '') or ''),
+            'accentHue': accent_hue,
+            'artHash': str(payload.get('art_hash', '') or ''),
+            'updatedAtMs': _coerce_int(str(payload.get('updated_at_ms', int(time.time() * 1000))), minimum=0, maximum=9999999999999, fallback=int(time.time() * 1000)),
+            'error': str(payload.get('error', '') or ''),
+        }
 
     def _get_selected_device(self) -> AudioDevice | None:
         for device in self._devices:
@@ -239,6 +375,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == '/state':
             self._send_json(self.bridge.get_state())
+            return
+        if parsed.path == '/now-playing':
+            self._send_json({'now_playing': self.bridge.get_now_playing()})
             return
         if parsed.path == '/config':
             self._send_json({'config': self.bridge.get_config()})
@@ -362,6 +501,38 @@ def _coerce_int(raw: str, minimum: int, maximum: int, fallback: int) -> int:
     return max(minimum, min(maximum, value))
 
 
+def _decode_subprocess_output(raw: bytes | str | None) -> str:
+    if raw is None:
+        return ''
+    if isinstance(raw, str):
+        return raw
+    candidates: list[str] = []
+    preferred = locale.getpreferredencoding(False)
+    if preferred:
+        candidates.append(preferred)
+    candidates.extend(['utf-8', 'gbk', 'cp936', 'utf-16'])
+    seen: set[str] = set()
+    for encoding in candidates:
+        key = encoding.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        except LookupError:
+            continue
+    return raw.decode(preferred or 'utf-8', errors='replace')
+
+
+def _safe_print(message: str) -> None:
+    try:
+        print(message)
+    except OSError:
+        return
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description='Audio Ring Python bridge')
     parser.add_argument('--host', default='127.0.0.1')
@@ -375,8 +546,8 @@ def main() -> None:
     server = ThreadingHTTPServer((args.host, args.port), BridgeHandler)
     ws_server = WebSocketBridgeServer(bridge, args.host, ws_port)
     ws_server.start()
-    print(f'Audio bridge listening on http://{args.host}:{args.port}')
-    print(f'Audio bridge websocket on ws://{args.host}:{ws_port}')
+    _safe_print(f'Audio bridge listening on http://{args.host}:{args.port}')
+    _safe_print(f'Audio bridge websocket on ws://{args.host}:{ws_port}')
     try:
         server.serve_forever()
     except KeyboardInterrupt:

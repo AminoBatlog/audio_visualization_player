@@ -1,4 +1,4 @@
-﻿import { defaultSettings, type VisualizerSettings } from './types'
+import { defaultNowPlayingState, defaultSettings, type NowPlayingState, type VisualizerSettings } from './types'
 
 const STORAGE_KEY = 'audio-ring-visualizer-settings'
 
@@ -43,6 +43,18 @@ export async function saveBridgeSettings(baseUrl: string, settings: VisualizerSe
     const payload = (await response.json()) as { config?: Partial<VisualizerSettings> }
     if (!payload.config) return null
     return { ...defaultSettings, ...payload.config }
+  } catch {
+    return null
+  }
+}
+
+export async function loadNowPlaying(baseUrl: string): Promise<NowPlayingState | null> {
+  try {
+    const response = await fetchWithTimeout(`${normalizeBridgeUrl(baseUrl)}/now-playing`, 5000)
+    if (!response.ok) return null
+    const payload = (await response.json()) as { now_playing?: Partial<NowPlayingState> }
+    if (!payload.now_playing) return null
+    return { ...defaultNowPlayingState, ...payload.now_playing }
   } catch {
     return null
   }

@@ -7,3 +7,5 @@ web/node_modules/
 web/dist/
 bridge_visualizer_settings.json
 settings.json
+.runtime_logs/
+apply_patch_test.txt
