@@ -10,6 +10,12 @@ interface AudioFrame {
   timestampMs: number
 }
 
+interface TitleScrollState {
+  label: string
+  offset: number
+  lastTimestampMs: number
+}
+
 const DEFAULT_AUDIO: AudioFrame = {
   levels: [],
   energy: 0,
@@ -106,7 +112,144 @@ function getEffectiveSettings(settings: VisualizerSettings, nowPlaying: NowPlayi
   }
 }
 
-function renderFrame(canvas: HTMLCanvasElement, settings: VisualizerSettings, frame: AudioFrame, image: HTMLImageElement | null, rotationRef: { current: number }) {
+function getNowPlayingTitle(nowPlaying: NowPlayingState): string {
+  if (!nowPlaying.active || !nowPlaying.title) {
+    return ''
+  }
+  return nowPlaying.artist ? `${nowPlaying.title} - ${nowPlaying.artist}` : nowPlaying.title
+}
+
+function drawCenterTitle(
+  ctx: CanvasRenderingContext2D,
+  settings: VisualizerSettings,
+  nowPlaying: NowPlayingState,
+  cx: number,
+  cy: number,
+  baseRadius: number,
+  centerSize: number,
+  nowMs: number,
+  titleScrollRef: { current: TitleScrollState },
+) {
+  const label = getNowPlayingTitle(nowPlaying)
+  if (!label) {
+    titleScrollRef.current = { label: '', offset: 0, lastTimestampMs: nowMs }
+    return
+  }
+
+  const centerRadius = centerSize / 2
+  const barsInnerRadius = baseRadius + 10
+  const innerClearance = centerRadius + 22
+  const outerClearance = barsInnerRadius - Math.max(18, settings.barWidth * 1.4)
+  const availableDepth = outerClearance - innerClearance
+  if (availableDepth < 24) {
+    return
+  }
+
+  const widthScale = Math.max(0.65, Math.min(1.35, settings.obsTitleWidthScale || 1))
+  const fontScale = Math.max(0.7, Math.min(1.6, settings.obsTitleFontScale || 1))
+  const titleHue = Number.isFinite(settings.obsTitleHue) ? settings.obsTitleHue : 210
+  const titleLightness = Math.max(68, Math.min(100, settings.obsTitleLightness || 98))
+  const scrollSpeed = Math.max(0.2, Math.min(3, settings.obsTitleScrollSpeed || 1))
+  const strokeScale = Math.max(0.5, Math.min(2.5, settings.obsTitleStrokeWidth || 1))
+
+  const bandHeight = Math.max(24, Math.min(36, availableDepth * 0.52))
+  const titleY = cy + innerClearance + Math.min(availableDepth * 0.48, availableDepth - bandHeight / 2 - 6)
+  const dy = titleY - cy
+  const halfWidth = Math.sqrt(Math.max(0, outerClearance * outerClearance - dy * dy)) - 10
+  const maxWidth = Math.max(0, halfWidth * 2 * widthScale)
+  if (maxWidth < 120) {
+    return
+  }
+
+  const fontSize = Math.max(18, Math.min(34, bandHeight * 0.9 * fontScale))
+  ctx.save()
+  ctx.font = `700 ${fontSize}px "Segoe UI", "Microsoft YaHei", sans-serif`
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+
+  const textWidth = ctx.measureText(label).width
+  const clipLeft = cx - maxWidth / 2
+  const clipTop = titleY - bandHeight / 2 - 6
+  const clipHeight = bandHeight + 12
+  const edgeFade = Math.min(42, Math.max(20, maxWidth * 0.12))
+
+  const background = ctx.createLinearGradient(clipLeft, clipTop, clipLeft, clipTop + clipHeight)
+  background.addColorStop(0, 'rgba(2, 8, 14, 0)')
+  background.addColorStop(0.18, 'rgba(3, 10, 16, 0.34)')
+  background.addColorStop(0.5, 'rgba(4, 12, 20, 0.58)')
+  background.addColorStop(0.82, 'rgba(3, 10, 16, 0.34)')
+  background.addColorStop(1, 'rgba(2, 8, 14, 0)')
+  ctx.fillStyle = background
+  ctx.fillRect(clipLeft, clipTop, maxWidth, clipHeight)
+
+  ctx.beginPath()
+  ctx.rect(clipLeft, clipTop, maxWidth, clipHeight)
+  ctx.clip()
+
+  const state = titleScrollRef.current
+  if (state.label !== label) {
+    titleScrollRef.current = { label, offset: 0, lastTimestampMs: nowMs }
+  } else {
+    const deltaMs = Math.max(0, nowMs - state.lastTimestampMs)
+    const overflow = textWidth - maxWidth
+    if (overflow > 6) {
+      const cycleWidth = textWidth + 72
+      state.offset = (state.offset + deltaMs * 0.03 * scrollSpeed) % cycleWidth
+    } else {
+      state.offset = 0
+    }
+    state.lastTimestampMs = nowMs
+  }
+
+  const nextState = titleScrollRef.current
+  const overflow = textWidth - maxWidth
+  const baseX = clipLeft + Math.max(0, (maxWidth - textWidth) / 2)
+  const textY = titleY
+
+  ctx.lineJoin = 'round'
+  ctx.lineWidth = Math.max(2, fontSize * 0.18 * strokeScale)
+  ctx.strokeStyle = 'rgba(2, 6, 10, 0.94)'
+  ctx.fillStyle = `hsla(${titleHue}, 100%, ${titleLightness}%, 0.99)`
+  ctx.shadowBlur = 24
+  ctx.shadowColor = `hsla(${titleHue}, 100%, ${Math.max(58, titleLightness - 24)}%, 0.42)`
+  if (overflow > 6) {
+    const cycleWidth = textWidth + 72
+    const startX = clipLeft - nextState.offset
+    ctx.strokeText(label, startX, textY)
+    ctx.strokeText(label, startX + cycleWidth, textY)
+    ctx.fillText(label, startX, textY)
+    ctx.fillText(label, startX + cycleWidth, textY)
+  } else {
+    ctx.strokeText(label, baseX, textY)
+    ctx.fillText(label, baseX, textY)
+  }
+
+  ctx.shadowBlur = 0
+  const leftFade = ctx.createLinearGradient(clipLeft, 0, clipLeft + edgeFade, 0)
+  leftFade.addColorStop(0, 'rgba(3, 10, 16, 0.96)')
+  leftFade.addColorStop(1, 'rgba(3, 10, 16, 0)')
+  ctx.fillStyle = leftFade
+  ctx.fillRect(clipLeft, clipTop, edgeFade, clipHeight)
+
+  const rightFade = ctx.createLinearGradient(clipLeft + maxWidth - edgeFade, 0, clipLeft + maxWidth, 0)
+  rightFade.addColorStop(0, 'rgba(3, 10, 16, 0)')
+  rightFade.addColorStop(1, 'rgba(3, 10, 16, 0.96)')
+  ctx.fillStyle = rightFade
+  ctx.fillRect(clipLeft + maxWidth - edgeFade, clipTop, edgeFade, clipHeight)
+  ctx.restore()
+}
+
+function renderFrame(
+  canvas: HTMLCanvasElement,
+  settings: VisualizerSettings,
+  frame: AudioFrame,
+  image: HTMLImageElement | null,
+  rotationRef: { current: number },
+  nowPlaying: NowPlayingState,
+  obsMode: boolean,
+  titleScrollRef: { current: TitleScrollState },
+  nowMs: number,
+) {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
   const dpr = window.devicePixelRatio || 1
@@ -239,6 +382,13 @@ function renderFrame(canvas: HTMLCanvasElement, settings: VisualizerSettings, fr
     ctx.fill()
     ctx.restore()
   }
+
+  if (obsMode) {
+    try {
+      drawCenterTitle(ctx, settings, nowPlaying, cx, cy, baseRadius, centerSize, nowMs, titleScrollRef)
+    } catch {
+    }
+  }
 }
 
 export function VisualizerApp() {
@@ -255,6 +405,8 @@ export function VisualizerApp() {
   const settingsRef = useRef(settings)
   const effectiveSettingsRef = useRef(effectiveSettings)
   const revisionRef = useRef(settings.config_revision ?? 0)
+  const nowPlayingRef = useRef(nowPlaying)
+  const titleScrollRef = useRef<TitleScrollState>({ label: '', offset: 0, lastTimestampMs: 0 })
 
   useEffect(() => {
     settingsRef.current = settings
@@ -263,6 +415,10 @@ export function VisualizerApp() {
   useEffect(() => {
     effectiveSettingsRef.current = effectiveSettings
   }, [effectiveSettings])
+
+  useEffect(() => {
+    nowPlayingRef.current = nowPlaying
+  }, [nowPlaying])
 
   useEffect(() => {
     const stop = subscribeSettings((next) => {
@@ -492,7 +648,7 @@ export function VisualizerApp() {
     const loop = () => {
       const canvas = canvasRef.current
       if (canvas) {
-        renderFrame(canvas, effectiveSettingsRef.current, audioFrameRef.current, image, rotationRef)
+        renderFrame(canvas, effectiveSettingsRef.current, audioFrameRef.current, image, rotationRef, nowPlayingRef.current, obsMode, titleScrollRef, performance.now())
       }
       statusCounter += 1
       if (statusCounter >= 15) {
@@ -521,3 +677,8 @@ export function VisualizerApp() {
     </div>
   )
 }
+
+
+
+
+

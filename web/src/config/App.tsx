@@ -250,6 +250,12 @@ export function ConfigApp() {
               <div style={{ color: '#9db9c7', lineHeight: 1.6, fontSize: 13 }}>OBS 中的页面会优先从 Python bridge 读取共享配置，所以不依赖普通浏览器的 localStorage。</div>
               <a href="./obs.html" target="_blank" rel="noreferrer" style={buttonLinkStyle}>Open OBS Preview</a>
             </div>
+            <div style={{ display: 'grid', gap: 14, marginTop: 18 }}>
+              <Slider label="Title Font Size" min={0.7} max={1.6} step={0.05} value={settings.obsTitleFontScale} onChange={(value) => void patch({ obsTitleFontScale: value })} />
+              <Slider label="Title Width" min={0.65} max={1.35} step={0.05} value={settings.obsTitleWidthScale} onChange={(value) => void patch({ obsTitleWidthScale: value })} />
+              <Slider label="Title Hue" min={0} max={360} step={1} value={settings.obsTitleHue} onChange={(value) => void patch({ obsTitleHue: value })} />
+              <Slider label="Title Lightness" min={68} max={100} step={1} value={settings.obsTitleLightness} onChange={(value) => void patch({ obsTitleLightness: value })} />
+            </div>
           </section>
         </div>
 
@@ -355,4 +361,10 @@ const codeStyle: CSSProperties = { display: 'block', padding: '14px 16px', borde
 const buttonStyle: CSSProperties = { padding: '12px 18px', borderRadius: 999, border: '1px solid rgba(201, 237, 251, 0.12)', background: 'rgba(255, 255, 255, 0.08)', color: '#eef8ff', cursor: 'pointer' }
 const buttonLinkStyle: CSSProperties = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 'fit-content', padding: '12px 18px', borderRadius: 999, border: '1px solid rgba(201, 237, 251, 0.12)', background: 'rgba(255, 255, 255, 0.08)', color: '#eef8ff', textDecoration: 'none' }
 const previewOrbStyle: CSSProperties = { width: 170, height: 170, borderRadius: '50%', overflow: 'hidden', border: '1px solid rgba(218, 244, 255, 0.22)', boxShadow: '0 12px 32px rgba(0, 0, 0, 0.25), 0 0 40px rgba(105, 228, 255, 0.18)', background: 'radial-gradient(circle, rgba(204,239,255,0.24), rgba(204,239,255,0.03))' }
+
+
+
+
+
+
 

@@ -15,6 +15,12 @@ export interface VisualizerSettings {
   centerImageScale: number
   ringOpacity: number
   accentHue: number
+  obsTitleFontScale: number
+  obsTitleWidthScale: number
+  obsTitleHue: number
+  obsTitleLightness: number
+  obsTitleScrollSpeed: number
+  obsTitleStrokeWidth: number
   audioFileDataUrl: string
   pythonBridgeUrl: string
   pythonBridgeDeviceId: string
@@ -69,6 +75,12 @@ export const defaultSettings: VisualizerSettings = {
   centerImageScale: 0.92,
   ringOpacity: 0.88,
   accentHue: 191,
+  obsTitleFontScale: 1,
+  obsTitleWidthScale: 1,
+  obsTitleHue: 210,
+  obsTitleLightness: 98,
+  obsTitleScrollSpeed: 1,
+  obsTitleStrokeWidth: 1,
   audioFileDataUrl: '',
   pythonBridgeUrl: 'http://127.0.0.1:8765',
   pythonBridgeDeviceId: '',
