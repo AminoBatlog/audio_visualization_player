@@ -9,6 +9,15 @@ function normalizeSettings(settings: Partial<VisualizerSettings>): VisualizerSet
   }
   return merged
 }
+
+export function hasStoredSettings(): boolean {
+  try {
+    return Boolean(window.localStorage.getItem(STORAGE_KEY))
+  } catch {
+    return false
+  }
+}
+
 export function loadSettings(): VisualizerSettings {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
@@ -31,9 +40,7 @@ export async function loadBridgeSettings(baseUrl: string): Promise<VisualizerSet
     if (!response.ok) return null
     const payload = (await response.json()) as { config?: Partial<VisualizerSettings> }
     if (!payload.config) return null
-    const merged = normalizeSettings(payload.config)
-    saveSettings(merged)
-    return merged
+    return normalizeSettings(payload.config)
   } catch {
     return null
   }
@@ -98,4 +105,3 @@ export async function fetchWithTimeout(input: RequestInfo | URL, timeoutMs: numb
     window.clearTimeout(timer)
   }
 }
-

@@ -1,5 +1,5 @@
 import { type CSSProperties, type ChangeEvent, useEffect, useMemo, useState } from 'react'
-import { fetchWithTimeout, loadBridgeSettings, loadNowPlaying, loadSettings, normalizeBridgeUrl, saveBridgeSettings, saveSettings } from '../shared/storage'
+import { fetchWithTimeout, hasStoredSettings, loadBridgeSettings, loadNowPlaying, loadSettings, normalizeBridgeUrl, saveBridgeSettings, saveSettings } from '../shared/storage'
 import { defaultNowPlayingState, defaultSettings, type AudioSourceType, type BridgeDevice, type BridgeHelperState, type NowPlayingState, type VisualizerSettings } from '../shared/types'
 
 function Slider(props: { label: string; min: number; max: number; step: number; value: number; onChange: (value: number) => void }) {
@@ -65,7 +65,7 @@ export function ConfigApp() {
   const [bridgeVersion, setBridgeVersion] = useState('unknown')
   const [bridgeHelper, setBridgeHelper] = useState<BridgeHelperState>(defaultHelperState)
   const [nowPlaying, setNowPlaying] = useState<NowPlayingState>(defaultNowPlayingState)
-  const obsHint = useMemo(() => `${window.location.origin}${window.location.pathname.replace('config.html', 'visualizer.html')}`, [])
+  const obsHint = useMemo(() => `${window.location.origin}${window.location.pathname.replace('config.html', 'obs.html')}`, [])
 
   const patch = async (partial: Partial<VisualizerSettings>) => {
     const next = { ...settings, ...partial }
@@ -145,12 +145,21 @@ export function ConfigApp() {
 
   useEffect(() => {
     const initialize = async () => {
-      const remote = await loadBridgeSettings(settings.pythonBridgeUrl)
-      const next = remote ?? settings
+      const local = loadSettings()
+      const keepLocal = hasStoredSettings()
+      setSettings(local)
+
+      const remote = await loadBridgeSettings(local.pythonBridgeUrl)
+      const next = keepLocal || !remote ? local : remote
       setSettings(next)
+      saveSettings(next)
+
       if (!remote) {
-        setBridgeStatus('Bridge config unavailable, probing state...')
+        setBridgeStatus('Bridge config unavailable, using saved local config')
+      } else if (keepLocal) {
+        setBridgeStatus('Using saved local config')
       }
+
       await refreshBridgeDevices(next.pythonBridgeUrl)
       await refreshNowPlaying(next.pythonBridgeUrl)
     }
@@ -206,7 +215,7 @@ export function ConfigApp() {
         <div style={panelStyle}>
           <div style={{ fontSize: 13, letterSpacing: '0.24em', textTransform: 'uppercase', color: '#8fdcff' }}>Config</div>
           <h1 style={{ margin: '8px 0 6px', fontSize: 36 }}>Audio Ring Web Visualizer</h1>
-          <p style={{ margin: 0, maxWidth: 760, color: '#bbd5e2', lineHeight: 1.6 }}>这个页面负责配置透明背景的可视化页面。后续给 OBS 使用时，建议把 `visualizer.html` 作为 Browser Source 入口。</p>
+          <p style={{ margin: 0, maxWidth: 760, color: '#bbd5e2', lineHeight: 1.6 }}>这个页面负责配置透明背景的可视化页面。后续给 OBS 使用时，建议把 `obs.html` 作为 Browser Source 入口。</p>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 0.85fr', gap: 22 }}>
@@ -239,7 +248,7 @@ export function ConfigApp() {
               <div style={{ color: '#dbeef8', fontSize: 14 }}>Recommended Browser Source URL</div>
               <code style={codeStyle}>{obsHint}</code>
               <div style={{ color: '#9db9c7', lineHeight: 1.6, fontSize: 13 }}>OBS 中的页面会优先从 Python bridge 读取共享配置，所以不依赖普通浏览器的 localStorage。</div>
-              <a href="./visualizer.html" target="_blank" rel="noreferrer" style={buttonLinkStyle}>Open Visualizer Preview</a>
+              <a href="./obs.html" target="_blank" rel="noreferrer" style={buttonLinkStyle}>Open OBS Preview</a>
             </div>
           </section>
         </div>
@@ -346,5 +355,4 @@ const codeStyle: CSSProperties = { display: 'block', padding: '14px 16px', borde
 const buttonStyle: CSSProperties = { padding: '12px 18px', borderRadius: 999, border: '1px solid rgba(201, 237, 251, 0.12)', background: 'rgba(255, 255, 255, 0.08)', color: '#eef8ff', cursor: 'pointer' }
 const buttonLinkStyle: CSSProperties = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 'fit-content', padding: '12px 18px', borderRadius: 999, border: '1px solid rgba(201, 237, 251, 0.12)', background: 'rgba(255, 255, 255, 0.08)', color: '#eef8ff', textDecoration: 'none' }
 const previewOrbStyle: CSSProperties = { width: 170, height: 170, borderRadius: '50%', overflow: 'hidden', border: '1px solid rgba(218, 244, 255, 0.22)', boxShadow: '0 12px 32px rgba(0, 0, 0, 0.25), 0 0 40px rgba(105, 228, 255, 0.18)', background: 'radial-gradient(circle, rgba(204,239,255,0.24), rgba(204,239,255,0.03))' }
-
 

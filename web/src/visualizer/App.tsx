@@ -89,6 +89,12 @@ function bridgeWebSocketUrl(httpUrl: string): string {
   return url.toString()
 }
 
+function detectObsMode(): boolean {
+  const path = window.location.pathname.toLowerCase()
+  const params = new URLSearchParams(window.location.search)
+  return path.endsWith('/obs.html') || params.get('mode') === 'obs'
+}
+
 function getEffectiveSettings(settings: VisualizerSettings, nowPlaying: NowPlayingState): VisualizerSettings {
   if (!settings.autoNowPlayingEnabled || !nowPlaying.active) {
     return settings
@@ -125,10 +131,11 @@ function renderFrame(canvas: HTMLCanvasElement, settings: VisualizerSettings, fr
   const activeRotation = settings.audioReactiveRotation ? settings.rotationSpeed * (0.35 + energy * 1.8) : settings.rotationSpeed
   rotationRef.current += activeRotation * 0.012
 
-  const glow = 80 + settings.glowIntensity * 120
-  const radial = ctx.createRadialGradient(cx, cy, 0, cx, cy, baseRadius + 220)
-  radial.addColorStop(0, `hsla(${settings.accentHue}, 85%, 70%, ${0.06 + energy * 0.12})`)
-  radial.addColorStop(0.45, `hsla(${settings.accentHue + 18}, 90%, 62%, ${0.05 * settings.ringOpacity})`)
+  const glow = 88 + settings.glowIntensity * 132
+  const radial = ctx.createRadialGradient(cx, cy, 0, cx, cy, baseRadius + 240)
+  radial.addColorStop(0, `hsla(${settings.accentHue}, 92%, 48%, ${0.12 + energy * 0.16})`)
+  radial.addColorStop(0.3, `hsla(${settings.accentHue + 12}, 95%, 30%, ${0.11 * settings.ringOpacity})`)
+  radial.addColorStop(0.55, `hsla(${settings.accentHue + 24}, 92%, 18%, ${0.07 * settings.ringOpacity})`)
   radial.addColorStop(1, 'hsla(200, 100%, 50%, 0)')
   ctx.fillStyle = radial
   ctx.fillRect(0, 0, viewWidth, viewHeight)
@@ -145,21 +152,21 @@ function renderFrame(canvas: HTMLCanvasElement, settings: VisualizerSettings, fr
     const y2 = cy + Math.sin(angle) * outer
     const hue = settings.accentHue + index * 0.7
     const gradient = ctx.createLinearGradient(x1, y1, x2, y2)
-    gradient.addColorStop(0, `hsla(${hue}, 80%, 78%, ${0.10 * settings.ringOpacity})`)
-    gradient.addColorStop(0.35, `hsla(${hue + 12}, 86%, 74%, ${0.28 * settings.ringOpacity})`)
-    gradient.addColorStop(1, `hsla(${hue + 24}, 98%, 82%, ${0.82 * settings.ringOpacity})`)
+    gradient.addColorStop(0, `hsla(${hue}, 88%, 52%, ${0.18 * settings.ringOpacity})`)
+    gradient.addColorStop(0.35, `hsla(${hue + 10}, 92%, 46%, ${0.36 * settings.ringOpacity})`)
+    gradient.addColorStop(1, `hsla(${hue + 18}, 100%, 68%, ${0.92 * settings.ringOpacity})`)
 
     ctx.save()
     ctx.strokeStyle = gradient
     ctx.lineWidth = lineWidth
     ctx.lineCap = 'round'
     ctx.shadowBlur = glow * (0.55 + level)
-    ctx.shadowColor = `hsla(${hue + 8}, 95%, 72%, ${0.5 + level * 0.25})`
+    ctx.shadowColor = `hsla(${hue + 8}, 100%, 64%, ${0.55 + level * 0.32})`
     ctx.beginPath()
     ctx.moveTo(x1, y1)
     ctx.lineTo(x2, y2)
     ctx.stroke()
-    ctx.strokeStyle = `hsla(${hue + 18}, 100%, 96%, ${0.35 + level * 0.55})`
+    ctx.strokeStyle = `hsla(${hue + 16}, 100%, 90%, ${0.3 + level * 0.5})`
     ctx.lineWidth = Math.max(1, lineWidth * 0.28)
     ctx.shadowBlur = 0
     ctx.beginPath()
@@ -173,7 +180,7 @@ function renderFrame(canvas: HTMLCanvasElement, settings: VisualizerSettings, fr
   ctx.translate(cx, cy)
   const ring = ctx.createRadialGradient(0, 0, baseRadius * 0.3, 0, 0, baseRadius + 24)
   ring.addColorStop(0, 'hsla(0, 0%, 100%, 0.08)')
-  ring.addColorStop(0.5, `hsla(${settings.accentHue}, 90%, 78%, 0.06)`)
+  ring.addColorStop(0.5, `hsla(${settings.accentHue}, 90%, 68%, 0.08)`)
   ring.addColorStop(1, 'hsla(0, 0%, 100%, 0.14)')
   ctx.fillStyle = ring
   ctx.beginPath()
@@ -185,32 +192,46 @@ function renderFrame(canvas: HTMLCanvasElement, settings: VisualizerSettings, fr
   ctx.fill()
   ctx.restore()
 
+  const centerSize = baseRadius * settings.centerImageScale * 1.28
+  ctx.save()
+  ctx.translate(cx, cy + centerSize * 0.46)
+  ctx.scale(1, 0.34)
+  const shadow = ctx.createRadialGradient(0, 0, centerSize * 0.08, 0, 0, centerSize * 0.56)
+  shadow.addColorStop(0, 'rgba(0, 0, 0, 0.34)')
+  shadow.addColorStop(0.6, `hsla(${settings.accentHue}, 100%, 10%, 0.16)`)
+  shadow.addColorStop(1, 'rgba(0, 0, 0, 0)')
+  ctx.fillStyle = shadow
+  ctx.beginPath()
+  ctx.arc(0, 0, centerSize * 0.58, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.restore()
+
   if (image) {
-    const imageSize = baseRadius * settings.centerImageScale * 1.28
     ctx.save()
     ctx.translate(cx, cy)
     ctx.rotate(rotationRef.current)
     ctx.beginPath()
-    ctx.arc(0, 0, imageSize / 2, 0, Math.PI * 2)
+    ctx.arc(0, 0, centerSize / 2, 0, Math.PI * 2)
     ctx.clip()
-    ctx.drawImage(image, -imageSize / 2, -imageSize / 2, imageSize, imageSize)
+    ctx.drawImage(image, -centerSize / 2, -centerSize / 2, centerSize, centerSize)
     ctx.restore()
     ctx.save()
     ctx.translate(cx, cy)
-    ctx.strokeStyle = `hsla(${settings.accentHue + 15}, 100%, 96%, 0.45)`
+    ctx.strokeStyle = `hsla(${settings.accentHue + 12}, 100%, 92%, 0.42)`
     ctx.lineWidth = 2
-    ctx.shadowBlur = 30
-    ctx.shadowColor = `hsla(${settings.accentHue + 24}, 100%, 78%, 0.35)`
+    ctx.shadowBlur = 38
+    ctx.shadowColor = `hsla(${settings.accentHue + 20}, 100%, 60%, 0.32)`
     ctx.beginPath()
-    ctx.arc(0, 0, imageSize / 2 + 8, 0, Math.PI * 2)
+    ctx.arc(0, 0, centerSize / 2 + 8, 0, Math.PI * 2)
     ctx.stroke()
     ctx.restore()
   } else {
     ctx.save()
     ctx.translate(cx, cy)
     const orb = ctx.createRadialGradient(0, 0, 0, 0, 0, baseRadius * 0.48)
-    orb.addColorStop(0, `hsla(${settings.accentHue}, 100%, 95%, 0.34)`)
-    orb.addColorStop(0.4, `hsla(${settings.accentHue + 14}, 90%, 78%, 0.20)`)
+    orb.addColorStop(0, `hsla(${settings.accentHue}, 100%, 82%, 0.32)`)
+    orb.addColorStop(0.4, `hsla(${settings.accentHue + 10}, 92%, 44%, 0.24)`)
+    orb.addColorStop(0.78, `hsla(${settings.accentHue + 24}, 90%, 18%, 0.16)`)
     orb.addColorStop(1, 'hsla(0, 0%, 100%, 0)')
     ctx.fillStyle = orb
     ctx.beginPath()
@@ -221,6 +242,7 @@ function renderFrame(canvas: HTMLCanvasElement, settings: VisualizerSettings, fr
 }
 
 export function VisualizerApp() {
+  const obsMode = useMemo(() => detectObsMode(), [])
   const [settings, setSettings] = useState(() => loadSettings())
   const [nowPlaying, setNowPlaying] = useState(defaultNowPlayingState)
   const [statusText, setStatusText] = useState('Loading')
@@ -483,19 +505,19 @@ export function VisualizerApp() {
     return () => cancelAnimationFrame(animationFrame)
   }, [image])
 
-  const accent = useMemo(() => `hsla(${effectiveSettings.accentHue}, 95%, 78%, 0.85)`, [effectiveSettings.accentHue])
+  const accent = useMemo(() => `hsla(${effectiveSettings.accentHue}, 95%, 74%, 0.88)`, [effectiveSettings.accentHue])
   const nowPlayingLabel = nowPlaying.active ? `${nowPlaying.title || 'Unknown Title'} - ${nowPlaying.artist || 'Unknown Artist'}` : statusText
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative', background: 'transparent' }}>
       <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
-      <div style={{ position: 'absolute', left: 20, bottom: 18, padding: '10px 14px', color: '#dff7ff', background: 'rgba(5, 16, 24, 0.3)', border: '1px solid rgba(200, 240, 255, 0.14)', borderRadius: 16, backdropFilter: 'blur(16px)', boxShadow: '0 12px 32px rgba(0, 0, 0, 0.18)' }}>
+      {!obsMode ? <div style={{ position: 'absolute', left: 20, bottom: 18, padding: '10px 14px', color: '#dff7ff', background: 'rgba(5, 16, 24, 0.3)', border: '1px solid rgba(200, 240, 255, 0.14)', borderRadius: 16, backdropFilter: 'blur(16px)', boxShadow: '0 12px 32px rgba(0, 0, 0, 0.18)' }}>
         <div style={{ fontSize: 12, letterSpacing: '0.16em', textTransform: 'uppercase', color: accent }}>Audio Ring</div>
         <div style={{ fontSize: 13, marginTop: 4 }}>{nowPlayingLabel}</div>
-      </div>
-      <a href="./config.html" style={{ position: 'absolute', right: 20, bottom: 18, textDecoration: 'none', color: '#f2fbff', background: 'rgba(5, 16, 24, 0.35)', border: '1px solid rgba(200, 240, 255, 0.15)', borderRadius: 999, padding: '10px 16px', backdropFilter: 'blur(14px)' }}>
+      </div> : null}
+      {!obsMode ? <a href="./config.html" style={{ position: 'absolute', right: 20, bottom: 18, textDecoration: 'none', color: '#f2fbff', background: 'rgba(5, 16, 24, 0.35)', border: '1px solid rgba(200, 240, 255, 0.15)', borderRadius: 999, padding: '10px 16px', backdropFilter: 'blur(14px)' }}>
         Configure
-      </a>
+      </a> : null}
     </div>
   )
 }
