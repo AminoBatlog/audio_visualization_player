@@ -4,14 +4,17 @@ import argparse
 from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import html
 import locale
 import json
 from pathlib import Path
+import re
 import subprocess
 import threading
 import time
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
+from urllib.request import Request, urlopen
 
 from websockets.sync.server import serve
 
@@ -20,7 +23,7 @@ from src.audio import AudioDevice, create_audio_source, list_output_devices
 
 CONFIG_PATH = Path(__file__).resolve().parent / 'bridge_visualizer_settings.json'
 NOW_PLAYING_HELPER_PATH = Path(__file__).resolve().parent / 'tools' / 'windows_media_session.ps1'
-BRIDGE_VERSION = '2026-03-13.music-select.1'
+BRIDGE_VERSION = '2026-03-14.qq-lyrics.1'
 DEFAULT_BRIDGE_CONFIG: dict[str, Any] = {
     'audioSource': 'python-bridge',
     'sensitivity': 1.15,
@@ -36,6 +39,20 @@ DEFAULT_BRIDGE_CONFIG: dict[str, Any] = {
     'centerImageScale': 0.92,
     'ringOpacity': 0.88,
     'accentHue': 191,
+    'obsTitleFontScale': 1.0,
+    'obsTitleWidthScale': 1.0,
+    'obsTitleHue': 210,
+    'obsTitleLightness': 98,
+    'obsTitleScrollSpeed': 1.0,
+    'obsTitleStrokeWidth': 1.0,
+    'obsLyricsEnabled': True,
+    'obsLyricsBottomOffset': 0.08,
+    'obsLyricsWidthScale': 1.0,
+    'obsLyricsCurrentFontScale': 1.0,
+    'obsLyricsNextFontScale': 0.74,
+    'obsLyricsHue': 210,
+    'obsLyricsLightness': 98,
+    'obsLyricsStrokeWidth': 1.05,
     'audioFileDataUrl': '',
     'pythonBridgeUrl': 'http://127.0.0.1:8765',
     'pythonBridgeDeviceId': '',
@@ -54,7 +71,20 @@ DEFAULT_NOW_PLAYING_STATE: dict[str, Any] = {
     'centerImageDataUrl': '',
     'accentHue': None,
     'artHash': '',
+    'trackKey': '',
+    'positionMs': 0,
+    'durationMs': 0,
+    'playbackState': '',
+    'timelineUpdatedAtMs': 0,
     'updatedAtMs': 0,
+    'error': '',
+}
+DEFAULT_LYRICS_STATE: dict[str, Any] = {
+    'trackKey': '',
+    'source': 'qqmusic',
+    'status': 'unsupported',
+    'format': '',
+    'lines': [],
     'error': '',
 }
 
@@ -75,6 +105,9 @@ class SpectrumBridge:
         self._latest_timestamp_ms = int(time.time() * 1000)
         self._latest_sequence = 0
         self._now_playing = dict(DEFAULT_NOW_PLAYING_STATE)
+        self._lyrics_state = dict(DEFAULT_LYRICS_STATE)
+        self._lyrics_cache: dict[str, dict[str, Any]] = {}
+        self._lyrics_failure_until_ms: dict[str, Any] = {}
         self._started_at_ms = int(time.time() * 1000)
         self._running = True
         self._capture_thread = threading.Thread(target=self._capture_loop, name='audio-ring-capture', daemon=True)
@@ -108,6 +141,10 @@ class SpectrumBridge:
     def get_now_playing(self) -> dict[str, Any]:
         with self._lock:
             return dict(self._now_playing)
+
+    def get_current_lyrics(self) -> dict[str, Any]:
+        with self._lock:
+            return {**DEFAULT_LYRICS_STATE, **self._lyrics_state, 'lines': list(self._lyrics_state.get('lines', []))}
 
     def get_config(self) -> dict[str, Any]:
         with self._lock:
@@ -211,12 +248,15 @@ class SpectrumBridge:
             if not enabled:
                 with self._lock:
                     self._now_playing = dict(DEFAULT_NOW_PLAYING_STATE)
+                    self._lyrics_state = dict(DEFAULT_LYRICS_STATE)
                 time.sleep(1.0)
                 continue
 
             state = self._read_now_playing(player_filter)
+            lyrics_state = self._read_lyrics_for_now_playing(state, player_filter)
             with self._lock:
                 self._now_playing = state
+                self._lyrics_state = lyrics_state
             time.sleep(3.0)
 
     def _read_now_playing(self, player_filter: str) -> dict[str, Any]:
@@ -296,9 +336,51 @@ class SpectrumBridge:
             'centerImageDataUrl': str(payload.get('art_data_url', '') or ''),
             'accentHue': accent_hue,
             'artHash': str(payload.get('art_hash', '') or ''),
+            'trackKey': str(payload.get('track_key', '') or _track_key_from_fields(str(payload.get('title', '') or ''), str(payload.get('artist', '') or ''))),
+            'positionMs': _coerce_int(str(payload.get('position_ms', 0) or 0), minimum=0, maximum=999999999, fallback=0),
+            'durationMs': _coerce_int(str(payload.get('duration_ms', 0) or 0), minimum=0, maximum=999999999, fallback=0),
+            'playbackState': str(payload.get('playback_state', '') or ''),
+            'timelineUpdatedAtMs': _coerce_int(str(payload.get('timeline_updated_at_ms', 0) or 0), minimum=0, maximum=9999999999999, fallback=0),
             'updatedAtMs': _coerce_int(str(payload.get('updated_at_ms', int(time.time() * 1000))), minimum=0, maximum=9999999999999, fallback=int(time.time() * 1000)),
             'error': str(payload.get('error', '') or ''),
         }
+
+    def _read_lyrics_for_now_playing(self, now_playing: dict[str, Any], player_filter: str) -> dict[str, Any]:
+        if player_filter != 'qqmusic':
+            return dict(DEFAULT_LYRICS_STATE)
+        if not bool(now_playing.get('active')) or not bool(now_playing.get('matchedPlayer')):
+            return dict(DEFAULT_LYRICS_STATE)
+        title = str(now_playing.get('title', '') or '')
+        artist = str(now_playing.get('artist', '') or '')
+        track_key = str(now_playing.get('trackKey', '') or _track_key_from_fields(title, artist))
+        if not track_key:
+            return {**DEFAULT_LYRICS_STATE, 'status': 'not_found'}
+        with self._lock:
+            cached = self._lyrics_cache.get(track_key)
+            failure_state = self._lyrics_failure_until_ms.get(track_key)
+        if cached is not None:
+            return {**DEFAULT_LYRICS_STATE, **cached, 'trackKey': track_key, 'lines': list(cached.get('lines', []))}
+        if isinstance(failure_state, dict) and int(failure_state.get('untilMs', 0) or 0) > int(time.time() * 1000):
+            return {
+                **DEFAULT_LYRICS_STATE,
+                'trackKey': track_key,
+                'status': str(failure_state.get('status', 'unavailable') or 'unavailable'),
+                'format': str(failure_state.get('format', '') or ''),
+                'error': str(failure_state.get('error', '') or ''),
+            }
+        lyrics_state = _fetch_qq_lyrics_state(title, artist, track_key)
+        with self._lock:
+            if lyrics_state.get('status') == 'ok':
+                self._lyrics_cache[track_key] = lyrics_state
+                self._lyrics_failure_until_ms.pop(track_key, None)
+            else:
+                self._lyrics_failure_until_ms[track_key] = {
+                    'untilMs': int(time.time() * 1000) + 15000,
+                    'status': str(lyrics_state.get('status', 'unavailable') or 'unavailable'),
+                    'format': str(lyrics_state.get('format', '') or ''),
+                    'error': str(lyrics_state.get('error', '') or ''),
+                }
+        return lyrics_state
 
     def _get_selected_device(self) -> AudioDevice | None:
         for device in self._devices:
@@ -385,6 +467,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == '/now-playing':
             self._send_json({'now_playing': self.bridge.get_now_playing()})
+            return
+        if parsed.path == '/lyrics/current':
+            self._send_json({'lyrics': self.bridge.get_current_lyrics()})
             return
         if parsed.path == '/config':
             self._send_json({'config': self.bridge.get_config()})
@@ -499,6 +584,129 @@ class WebSocketBridgeServer:
         self._server = server
         server.serve_forever()
 
+
+
+def _track_key_from_fields(title: str, artist: str) -> str:
+    return f"{title.strip().lower()}|{artist.strip().lower()}".strip('|')
+
+
+def _http_get_text(url: str, timeout: float = 8.0) -> str:
+    request = Request(url, headers={
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://y.qq.com/',
+        'Origin': 'https://y.qq.com',
+    })
+    with urlopen(request, timeout=timeout) as response:
+        return response.read().decode('utf-8', errors='replace')
+
+
+def _normalize_qq_search_text(value: str) -> str:
+    text = str(value or '').strip().lower()
+    text = re.sub(r'[\(\[（【][^\)\]）】]{1,32}[\)\]）】]', ' ', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+
+def _qq_song_match_score(song_name: str, song_artist: str, target_title: str, target_artist: str) -> int:
+    normalized_song_name = _normalize_qq_search_text(song_name)
+    normalized_song_artist = _normalize_qq_search_text(song_artist)
+    normalized_title = _normalize_qq_search_text(target_title)
+    normalized_artist = _normalize_qq_search_text(target_artist)
+    score = 0
+    if normalized_title and normalized_song_name == normalized_title:
+        score += 100
+    elif normalized_title and (normalized_title in normalized_song_name or normalized_song_name in normalized_title):
+        score += 60
+    if normalized_artist and normalized_song_artist == normalized_artist:
+        score += 40
+    elif normalized_artist and (normalized_artist in normalized_song_artist or normalized_song_artist in normalized_artist):
+        score += 20
+    return score
+
+
+def _search_qq_song_mid(title: str, artist: str) -> str:
+    queries: list[str] = []
+    for candidate in (
+        f'{title} {artist}'.strip(),
+        f'{_normalize_qq_search_text(title)} {artist}'.strip(),
+        title.strip(),
+        _normalize_qq_search_text(title),
+    ):
+        candidate = candidate.strip()
+        if candidate and candidate not in queries:
+            queries.append(candidate)
+
+    best_mid = ''
+    best_score = -1
+    for candidate in queries:
+        payload = json.loads(_http_get_text(f'https://c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg?format=json&key={quote(candidate)}'))
+        songs = payload.get('data', {}).get('song', {}).get('itemlist', [])
+        if not songs:
+            continue
+        for song in songs:
+            song_name = str(song.get('name', '') or '')
+            song_artist = str(song.get('singer', '') or '')
+            song_mid = str(song.get('mid', '') or '')
+            score = _qq_song_match_score(song_name, song_artist, title, artist)
+            if score > best_score and song_mid:
+                best_score = score
+                best_mid = song_mid
+        if best_score >= 100:
+            return best_mid
+        if not best_mid:
+            best_mid = str(songs[0].get('mid', '') or '')
+    return best_mid
+
+
+def _parse_lrc_lines(raw_lyric: str) -> list[dict[str, Any]]:
+    lines: list[dict[str, Any]] = []
+    pending: list[tuple[int, str]] = []
+    for raw_line in raw_lyric.splitlines():
+        line = html.unescape(raw_line).strip()
+        if not line:
+            continue
+        matches = re.findall(r'\[(\d{2}):(\d{2})(?:[.:](\d{2,3}))?\]', line)
+        text = re.sub(r'\[[^\]]+\]', '', line).strip()
+        if not matches or not text:
+            continue
+        for mm, ss, fraction in matches:
+            millis = int(mm) * 60_000 + int(ss) * 1000
+            if fraction:
+                millis += int((fraction + '0' * 3)[:3])
+            pending.append((millis, text))
+    pending.sort(key=lambda item: item[0])
+    for index, (start_ms, text) in enumerate(pending):
+        end_ms = pending[index + 1][0] - 1 if index + 1 < len(pending) else start_ms + 6000
+        lines.append({'startMs': start_ms, 'endMs': max(start_ms + 1, end_ms), 'text': text})
+    return lines
+
+
+def _fetch_qq_lyrics_state(title: str, artist: str, track_key: str) -> dict[str, Any]:
+    if not title:
+        return {**DEFAULT_LYRICS_STATE, 'trackKey': track_key, 'status': 'not_found'}
+    try:
+        song_mid = _search_qq_song_mid(title, artist)
+        if not song_mid:
+            return {**DEFAULT_LYRICS_STATE, 'trackKey': track_key, 'status': 'not_found'}
+        lyric_url = (
+            'https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?'
+            f'songmid={quote(song_mid)}&format=json&nobase64=1&g_tk=5381&loginUin=0&hostUin=0&'
+            'inCharset=utf8&outCharset=utf-8&notice=0&platform=yqq.json&needNewCode=0'
+        )
+        lyric_payload = json.loads(_http_get_text(lyric_url))
+        raw_lyric = str(lyric_payload.get('lyric', '') or '')
+        lines = _parse_lrc_lines(raw_lyric)
+        if not lines:
+            return {**DEFAULT_LYRICS_STATE, 'trackKey': track_key, 'status': 'not_found'}
+        return {
+            **DEFAULT_LYRICS_STATE,
+            'trackKey': track_key,
+            'status': 'ok',
+            'format': 'lrc',
+            'lines': lines,
+        }
+    except Exception as exc:
+        return {**DEFAULT_LYRICS_STATE, 'trackKey': track_key, 'status': 'unavailable', 'error': str(exc)}
 
 def _coerce_int(raw: str, minimum: int, maximum: int, fallback: int) -> int:
     try:

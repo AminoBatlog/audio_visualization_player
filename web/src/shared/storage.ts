@@ -1,4 +1,4 @@
-import { defaultNowPlayingState, defaultSettings, type NowPlayingState, type VisualizerSettings } from './types'
+import { defaultLyricsState, defaultNowPlayingState, defaultSettings, type LyricsState, type NowPlayingState, type VisualizerSettings } from './types'
 
 const STORAGE_KEY = 'audio-ring-visualizer-settings'
 
@@ -69,6 +69,26 @@ export async function loadNowPlaying(baseUrl: string): Promise<NowPlayingState |
     const payload = (await response.json()) as { now_playing?: Partial<NowPlayingState> }
     if (!payload.now_playing) return null
     return { ...defaultNowPlayingState, ...payload.now_playing }
+  } catch {
+    return null
+  }
+}
+
+export async function loadCurrentLyrics(baseUrl: string): Promise<LyricsState | null> {
+  try {
+    const response = await fetchWithTimeout(`${normalizeBridgeUrl(baseUrl)}/lyrics/current`, 8000)
+    if (!response.ok) return null
+    const payload = (await response.json()) as { lyrics?: Partial<LyricsState> }
+    if (!payload.lyrics) return null
+    return {
+      ...defaultLyricsState,
+      ...payload.lyrics,
+      lines: Array.isArray(payload.lyrics.lines) ? payload.lyrics.lines.map((line) => ({
+        startMs: Number(line?.startMs ?? 0) || 0,
+        endMs: Number(line?.endMs ?? 0) || 0,
+        text: String(line?.text ?? ''),
+      })) : [],
+    }
   } catch {
     return null
   }

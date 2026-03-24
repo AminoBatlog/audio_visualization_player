@@ -21,6 +21,14 @@ export interface VisualizerSettings {
   obsTitleLightness: number
   obsTitleScrollSpeed: number
   obsTitleStrokeWidth: number
+  obsLyricsEnabled: boolean
+  obsLyricsBottomOffset: number
+  obsLyricsWidthScale: number
+  obsLyricsCurrentFontScale: number
+  obsLyricsNextFontScale: number
+  obsLyricsHue: number
+  obsLyricsLightness: number
+  obsLyricsStrokeWidth: number
   audioFileDataUrl: string
   pythonBridgeUrl: string
   pythonBridgeDeviceId: string
@@ -50,7 +58,27 @@ export interface NowPlayingState {
   centerImageDataUrl: string
   accentHue: number | null
   artHash: string
+  trackKey: string
+  positionMs: number
+  durationMs: number
+  playbackState: string
+  timelineUpdatedAtMs: number
   updatedAtMs: number
+  error: string
+}
+
+export interface LyricsLine {
+  startMs: number
+  endMs: number
+  text: string
+}
+
+export interface LyricsState {
+  trackKey: string
+  source: 'qqmusic'
+  status: 'ok' | 'not_found' | 'unsupported' | 'unavailable'
+  format: 'lrc' | 'qrc' | ''
+  lines: LyricsLine[]
   error: string
 }
 
@@ -81,6 +109,14 @@ export const defaultSettings: VisualizerSettings = {
   obsTitleLightness: 98,
   obsTitleScrollSpeed: 1,
   obsTitleStrokeWidth: 1,
+  obsLyricsEnabled: true,
+  obsLyricsBottomOffset: 0.08,
+  obsLyricsWidthScale: 1,
+  obsLyricsCurrentFontScale: 1,
+  obsLyricsNextFontScale: 0.74,
+  obsLyricsHue: 210,
+  obsLyricsLightness: 98,
+  obsLyricsStrokeWidth: 1.05,
   audioFileDataUrl: '',
   pythonBridgeUrl: 'http://127.0.0.1:8765',
   pythonBridgeDeviceId: '',
@@ -102,7 +138,20 @@ export const defaultNowPlayingState: NowPlayingState = {
   centerImageDataUrl: '',
   accentHue: null,
   artHash: '',
+  trackKey: '',
+  positionMs: 0,
+  durationMs: 0,
+  playbackState: '',
+  timelineUpdatedAtMs: 0,
   updatedAtMs: 0,
   error: '',
 }
 
+export const defaultLyricsState: LyricsState = {
+  trackKey: '',
+  source: 'qqmusic',
+  status: 'unsupported',
+  format: '',
+  lines: [],
+  error: '',
+}

@@ -255,6 +255,19 @@ export function ConfigApp() {
               <Slider label="Title Width" min={0.65} max={1.35} step={0.05} value={settings.obsTitleWidthScale} onChange={(value) => void patch({ obsTitleWidthScale: value })} />
               <Slider label="Title Hue" min={0} max={360} step={1} value={settings.obsTitleHue} onChange={(value) => void patch({ obsTitleHue: value })} />
               <Slider label="Title Lightness" min={68} max={100} step={1} value={settings.obsTitleLightness} onChange={(value) => void patch({ obsTitleLightness: value })} />
+              <Slider label="Title Scroll Speed" min={0.2} max={3} step={0.05} value={settings.obsTitleScrollSpeed} onChange={(value) => void patch({ obsTitleScrollSpeed: value })} />
+              <Slider label="Title Stroke Width" min={0.5} max={2.5} step={0.05} value={settings.obsTitleStrokeWidth} onChange={(value) => void patch({ obsTitleStrokeWidth: value })} />
+              <label style={{ ...labelStyle, gridTemplateColumns: '1fr auto', alignItems: 'center' }}>
+                <span>Bottom Lyrics</span>
+                <input type="checkbox" checked={settings.obsLyricsEnabled} onChange={(event) => void patch({ obsLyricsEnabled: event.target.checked })} style={{ width: 18, height: 18 }} />
+              </label>
+              <Slider label="Lyrics Bottom" min={0.04} max={0.16} step={0.005} value={settings.obsLyricsBottomOffset} onChange={(value) => void patch({ obsLyricsBottomOffset: value })} />
+              <Slider label="Lyrics Width" min={0.7} max={1.2} step={0.05} value={settings.obsLyricsWidthScale} onChange={(value) => void patch({ obsLyricsWidthScale: value })} />
+              <Slider label="Lyrics Current Size" min={0.7} max={1.6} step={0.05} value={settings.obsLyricsCurrentFontScale} onChange={(value) => void patch({ obsLyricsCurrentFontScale: value })} />
+              <Slider label="Lyrics Next Size" min={0.5} max={1.2} step={0.05} value={settings.obsLyricsNextFontScale} onChange={(value) => void patch({ obsLyricsNextFontScale: value })} />
+              <Slider label="Lyrics Hue" min={0} max={360} step={1} value={settings.obsLyricsHue} onChange={(value) => void patch({ obsLyricsHue: value })} />
+              <Slider label="Lyrics Lightness" min={68} max={100} step={1} value={settings.obsLyricsLightness} onChange={(value) => void patch({ obsLyricsLightness: value })} />
+              <Slider label="Lyrics Stroke" min={0.5} max={2.5} step={0.05} value={settings.obsLyricsStrokeWidth} onChange={(value) => void patch({ obsLyricsStrokeWidth: value })} />
             </div>
           </section>
         </div>

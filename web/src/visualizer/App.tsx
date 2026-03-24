@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { loadBridgeSettings, loadNowPlaying, loadSettings, normalizeBridgeUrl, subscribeSettings } from '../shared/storage'
-import { defaultNowPlayingState, type AudioSourceType, type NowPlayingState, type VisualizerSettings } from '../shared/types'
+import { loadBridgeSettings, loadCurrentLyrics, loadNowPlaying, loadSettings, normalizeBridgeUrl, subscribeSettings } from '../shared/storage'
+import { defaultLyricsState, defaultNowPlayingState, type AudioSourceType, type LyricsState, type NowPlayingState, type VisualizerSettings } from '../shared/types'
 
 interface AudioFrame {
   levels: number[]
@@ -117,6 +117,138 @@ function getNowPlayingTitle(nowPlaying: NowPlayingState): string {
     return ''
   }
   return nowPlaying.artist ? `${nowPlaying.title} - ${nowPlaying.artist}` : nowPlaying.title
+}
+
+function getTimelinePosition(nowPlaying: NowPlayingState, nowMs: number): number {
+  const playbackState = nowPlaying.playbackState.toLowerCase()
+  let positionMs = Math.max(0, nowPlaying.positionMs || 0)
+  if ((playbackState === 'playing' || playbackState === 'playing-fallback') && nowPlaying.timelineUpdatedAtMs > 0) {
+    positionMs += Math.max(0, nowMs - nowPlaying.timelineUpdatedAtMs)
+  }
+  if (nowPlaying.durationMs > 0) {
+    positionMs = Math.min(positionMs, nowPlaying.durationMs)
+  }
+  return positionMs
+}
+
+function getActiveLyricPair(lyrics: LyricsState, positionMs: number | null): { currentText: string; nextText: string } {
+  if (lyrics.status !== 'ok' || !lyrics.lines.length) {
+    return { currentText: '', nextText: '' }
+  }
+  if (positionMs == null) {
+    return {
+      currentText: lyrics.lines[0]?.text ?? '',
+      nextText: lyrics.lines[1]?.text ?? '',
+    }
+  }
+  let currentIndex = -1
+  for (let index = 0; index < lyrics.lines.length; index += 1) {
+    const line = lyrics.lines[index]
+    if (positionMs < line.startMs) {
+      return {
+        currentText: currentIndex >= 0 ? lyrics.lines[currentIndex].text : '',
+        nextText: line.text,
+      }
+    }
+    if (positionMs >= line.startMs && positionMs <= line.endMs) {
+      currentIndex = index
+      return {
+        currentText: line.text,
+        nextText: lyrics.lines[index + 1]?.text ?? '',
+      }
+    }
+    currentIndex = index
+  }
+  if (currentIndex >= 0) {
+    return { currentText: lyrics.lines[currentIndex].text, nextText: '' }
+  }
+  return { currentText: '', nextText: '' }
+}
+
+function drawSubtitleLine(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  width: number,
+  fontSize: number,
+  fillStyle: string,
+  strokeWidth: number,
+  shadowColor: string,
+) {
+  if (!text) return
+  const clipLeft = x - width / 2
+  const clipTop = y - fontSize * 0.8
+  const clipHeight = fontSize * 1.5
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(clipLeft, clipTop, width, clipHeight)
+  ctx.clip()
+  ctx.font = `700 ${fontSize}px "Segoe UI", "Microsoft YaHei", sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.lineJoin = 'round'
+  ctx.lineWidth = strokeWidth
+  ctx.strokeStyle = 'rgba(2, 6, 10, 0.94)'
+  ctx.fillStyle = fillStyle
+  ctx.shadowBlur = 20
+  ctx.shadowColor = shadowColor
+  ctx.strokeText(text, x, y)
+  ctx.fillText(text, x, y)
+  ctx.restore()
+}
+
+function drawBottomLyrics(
+  ctx: CanvasRenderingContext2D,
+  settings: VisualizerSettings,
+  nowPlaying: NowPlayingState,
+  lyrics: LyricsState,
+  viewWidth: number,
+  viewHeight: number,
+  nowMs: number,
+) {
+  if (!settings.obsLyricsEnabled || lyrics.status !== 'ok' || !lyrics.lines.length) {
+    return
+  }
+  if (!nowPlaying.trackKey || lyrics.trackKey !== nowPlaying.trackKey) {
+    return
+  }
+  const playbackState = nowPlaying.playbackState.toLowerCase()
+  const hasReliableTimeline = nowPlaying.timelineUpdatedAtMs > 0 || playbackState === 'paused'
+  const lyricPositionMs = hasReliableTimeline ? getTimelinePosition(nowPlaying, nowMs) : null
+
+  const { currentText, nextText } = getActiveLyricPair(lyrics, lyricPositionMs)
+  if (!currentText && !nextText) {
+    return
+  }
+
+  const widthScale = Math.max(0.7, Math.min(1.2, settings.obsLyricsWidthScale || 1))
+  const bottomOffset = Math.max(0.04, Math.min(0.16, settings.obsLyricsBottomOffset || 0.08))
+  const currentFont = Math.max(24, Math.min(46, viewWidth * 0.025 * Math.max(0.7, Math.min(1.6, settings.obsLyricsCurrentFontScale || 1))))
+  const nextFont = Math.max(18, Math.min(34, currentFont * Math.max(0.5, Math.min(1.2, settings.obsLyricsNextFontScale || 0.74))))
+  const strokeWidth = Math.max(2, currentFont * 0.14 * Math.max(0.5, Math.min(2.5, settings.obsLyricsStrokeWidth || 1)))
+  const subtitleWidth = Math.min(viewWidth - 60, viewWidth * 0.72 * widthScale)
+  const centerX = viewWidth / 2
+  const currentY = viewHeight * (1 - bottomOffset) - nextFont - 14
+  const nextY = viewHeight * (1 - bottomOffset)
+  const lyricHue = Number.isFinite(settings.obsLyricsHue) ? settings.obsLyricsHue : 210
+  const lyricLightness = Math.max(68, Math.min(100, settings.obsLyricsLightness || 98))
+
+  const backgroundHeight = currentFont + nextFont + 52
+  const backgroundTop = currentY - currentFont * 0.9
+  const background = ctx.createLinearGradient(centerX - subtitleWidth / 2, backgroundTop, centerX - subtitleWidth / 2, backgroundTop + backgroundHeight)
+  background.addColorStop(0, 'rgba(2, 8, 14, 0)')
+  background.addColorStop(0.18, 'rgba(3, 10, 16, 0.26)')
+  background.addColorStop(0.5, 'rgba(4, 12, 20, 0.5)')
+  background.addColorStop(0.82, 'rgba(3, 10, 16, 0.26)')
+  background.addColorStop(1, 'rgba(2, 8, 14, 0)')
+  ctx.save()
+  ctx.fillStyle = background
+  ctx.fillRect(centerX - subtitleWidth / 2, backgroundTop, subtitleWidth, backgroundHeight)
+  ctx.restore()
+
+  drawSubtitleLine(ctx, currentText, centerX, currentY, subtitleWidth, currentFont, `hsla(${lyricHue}, 100%, ${lyricLightness}%, 0.99)`, strokeWidth, `hsla(${lyricHue}, 100%, ${Math.max(58, lyricLightness - 22)}%, 0.45)`)
+  drawSubtitleLine(ctx, nextText, centerX, nextY, subtitleWidth, nextFont, `hsla(${lyricHue}, 70%, ${Math.max(60, lyricLightness - 16)}%, 0.82)`, Math.max(2, strokeWidth * 0.84), `hsla(${lyricHue}, 80%, ${Math.max(52, lyricLightness - 28)}%, 0.28)`)
 }
 
 function drawCenterTitle(
@@ -246,6 +378,7 @@ function renderFrame(
   image: HTMLImageElement | null,
   rotationRef: { current: number },
   nowPlaying: NowPlayingState,
+  lyrics: LyricsState,
   obsMode: boolean,
   titleScrollRef: { current: TitleScrollState },
   nowMs: number,
@@ -386,6 +519,7 @@ function renderFrame(
   if (obsMode) {
     try {
       drawCenterTitle(ctx, settings, nowPlaying, cx, cy, baseRadius, centerSize, nowMs, titleScrollRef)
+      drawBottomLyrics(ctx, settings, nowPlaying, lyrics, viewWidth, viewHeight, nowMs)
     } catch {
     }
   }
@@ -395,6 +529,7 @@ export function VisualizerApp() {
   const obsMode = useMemo(() => detectObsMode(), [])
   const [settings, setSettings] = useState(() => loadSettings())
   const [nowPlaying, setNowPlaying] = useState(defaultNowPlayingState)
+  const [lyrics, setLyrics] = useState(defaultLyricsState)
   const [statusText, setStatusText] = useState('Loading')
   const effectiveSettings = useMemo(() => getEffectiveSettings(settings, nowPlaying), [settings, nowPlaying])
   const image = useCenterImage(effectiveSettings.centerImageDataUrl)
@@ -406,6 +541,7 @@ export function VisualizerApp() {
   const effectiveSettingsRef = useRef(effectiveSettings)
   const revisionRef = useRef(settings.config_revision ?? 0)
   const nowPlayingRef = useRef(nowPlaying)
+  const lyricsRef = useRef(lyrics)
   const titleScrollRef = useRef<TitleScrollState>({ label: '', offset: 0, lastTimestampMs: 0 })
 
   useEffect(() => {
@@ -419,6 +555,10 @@ export function VisualizerApp() {
   useEffect(() => {
     nowPlayingRef.current = nowPlaying
   }, [nowPlaying])
+
+  useEffect(() => {
+    lyricsRef.current = lyrics
+  }, [lyrics])
 
   useEffect(() => {
     const stop = subscribeSettings((next) => {
@@ -462,6 +602,34 @@ export function VisualizerApp() {
     }, 4000)
     return () => window.clearInterval(timer)
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const syncLyrics = async () => {
+      const currentSettings = settingsRef.current
+      const currentNowPlaying = nowPlayingRef.current
+      if (!obsMode || !currentSettings.obsLyricsEnabled || currentSettings.autoNowPlayingPlayerFilter !== 'qqmusic' || !currentNowPlaying.trackKey) {
+        setLyrics(defaultLyricsState)
+        return
+      }
+      const next = await loadCurrentLyrics(currentSettings.pythonBridgeUrl)
+      if (cancelled) return
+      if (!next || next.trackKey !== currentNowPlaying.trackKey) {
+        setLyrics(defaultLyricsState)
+        return
+      }
+      setLyrics(next)
+    }
+
+    void syncLyrics()
+    const timer = window.setInterval(() => {
+      void syncLyrics()
+    }, 10000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [obsMode, nowPlaying.trackKey, settings.obsLyricsEnabled, settings.pythonBridgeUrl, settings.autoNowPlayingPlayerFilter])
 
   useEffect(() => {
     let cancelled = false
@@ -648,7 +816,7 @@ export function VisualizerApp() {
     const loop = () => {
       const canvas = canvasRef.current
       if (canvas) {
-        renderFrame(canvas, effectiveSettingsRef.current, audioFrameRef.current, image, rotationRef, nowPlayingRef.current, obsMode, titleScrollRef, performance.now())
+        renderFrame(canvas, effectiveSettingsRef.current, audioFrameRef.current, image, rotationRef, nowPlayingRef.current, lyricsRef.current, obsMode, titleScrollRef, performance.now())
       }
       statusCounter += 1
       if (statusCounter >= 15) {

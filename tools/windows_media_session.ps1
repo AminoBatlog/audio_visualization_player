@@ -1,8 +1,22 @@
-param(
+﻿param(
     [string]$PlayerFilter = 'qqmusic'
 )
 
 $ErrorActionPreference = 'Stop'
+
+Add-Type @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class CodexWin32WindowApi {
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+}
+"@
 
 function Get-AsTaskMethod {
     return [System.WindowsRuntimeSystemExtensions].GetMethods() |
@@ -202,6 +216,124 @@ function Get-WindowTrackInfo {
     }
 }
 
+function Get-TrackKey {
+    param(
+        [string]$Title,
+        [string]$Artist
+    )
+
+    $normalizedTitle = (Normalize-Text $Title).Trim().ToLowerInvariant()
+    $normalizedArtist = (Normalize-Text $Artist).Trim().ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($normalizedTitle) -and [string]::IsNullOrWhiteSpace($normalizedArtist)) {
+        return ''
+    }
+    return ($normalizedTitle + '|' + $normalizedArtist).Trim('|')
+}
+
+
+function Get-WindowTitleScore {
+    param(
+        [string]$WindowTitle,
+        [string]$Player = ''
+    )
+
+    $title = (Normalize-Text $WindowTitle).Trim()
+    if ([string]::IsNullOrWhiteSpace($title)) {
+        return -1000
+    }
+
+    $normalizedTitle = $title.ToLowerInvariant()
+    $score = 0
+
+    switch ((Normalize-Text $Player).ToLowerInvariant()) {
+        'qqmusic' {
+            if ($normalizedTitle -in @('桌面歌词', 'qq音乐', 'qqmusic')) {
+                return -500
+            }
+            if ($normalizedTitle.Contains('桌面歌词')) {
+                $score -= 300
+            }
+        }
+        'netease' {
+            if ($normalizedTitle -in @('网易云音乐', 'cloudmusic')) {
+                return -500
+            }
+        }
+    }
+
+    if ($title -match '^.+?\s+-\s+.+$') {
+        $score += 300
+    }
+    if ($title.Length -ge 6) {
+        $score += [Math]::Min(60, $title.Length)
+    }
+    if ($normalizedTitle.Contains('歌词')) {
+        $score -= 80
+    }
+    if ($normalizedTitle.Contains('播放') -or $normalizedTitle.Contains('推荐')) {
+        $score -= 30
+    }
+    return $score
+}
+
+function Get-ProcessWindowTitles {
+    param([int]$ProcessId)
+
+    $titles = New-Object System.Collections.Generic.List[object]
+    $callback = [CodexWin32WindowApi+EnumWindowsProc]{
+        param($hWnd, $lParam)
+
+        $windowProcessId = 0
+        [void][CodexWin32WindowApi]::GetWindowThreadProcessId($hWnd, [ref]$windowProcessId)
+        if ($windowProcessId -ne $ProcessId) {
+            return $true
+        }
+
+        $length = [CodexWin32WindowApi]::GetWindowTextLength($hWnd)
+        $buffer = New-Object System.Text.StringBuilder ($length + 1)
+        [void][CodexWin32WindowApi]::GetWindowText($hWnd, $buffer, $buffer.Capacity)
+        $titles.Add([pscustomobject]@{
+            Title = $buffer.ToString()
+            Visible = [CodexWin32WindowApi]::IsWindowVisible($hWnd)
+        }) | Out-Null
+        return $true
+    }
+
+    [CodexWin32WindowApi]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
+    return $titles
+}
+
+function Get-BestWindowTitleForProcessName {
+    param(
+        [string]$ProcessName,
+        [string]$Player = ''
+    )
+
+    $candidates = @()
+    foreach ($process in (Get-Process $ProcessName -ErrorAction SilentlyContinue | Sort-Object StartTime -Descending)) {
+        foreach ($window in (Get-ProcessWindowTitles -ProcessId $process.Id)) {
+            $title = (Normalize-Text $window.Title).Trim()
+            if ([string]::IsNullOrWhiteSpace($title)) {
+                continue
+            }
+            $candidates += [pscustomobject]@{
+                Title = $title
+                Visible = [bool]$window.Visible
+                Score = Get-WindowTitleScore -WindowTitle $title -Player $Player
+                StartedAt = $process.StartTime
+            }
+        }
+    }
+
+    $best = $candidates |
+        Sort-Object             @{ Expression = { if ($_.Visible) { 1 } else { 0 } }; Descending = $true },             @{ Expression = { $_.Score }; Descending = $true },             @{ Expression = { $_.StartedAt }; Descending = $true } |
+        Select-Object -First 1
+    if ($null -eq $best) {
+        return ''
+    }
+    return $best.Title
+}
+
 function Get-UrlBytes {
     param([string]$Url)
 
@@ -345,15 +477,13 @@ function Get-CloudMusicArtwork {
 }
 
 function Get-QQMusicWindowFallback {
-    $process = Get-Process QQMusic -ErrorAction SilentlyContinue |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_.MainWindowTitle) } |
-        Select-Object -First 1
+    $windowTitle = Get-BestWindowTitleForProcessName -ProcessName 'QQMusic' -Player 'qqmusic'
 
-    if ($null -eq $process) {
+    if ([string]::IsNullOrWhiteSpace($windowTitle)) {
         return $null
     }
 
-    $trackInfo = Get-WindowTrackInfo -WindowTitle $process.MainWindowTitle
+    $trackInfo = Get-WindowTrackInfo -WindowTitle $windowTitle
     $cachedArtwork = Get-QQMusicCachedArtwork
     return [ordered]@{
         active = $true
@@ -366,6 +496,11 @@ function Get-QQMusicWindowFallback {
         art_mime_type = if ($null -ne $cachedArtwork) { $cachedArtwork.art_mime_type } else { $null }
         art_hash = if ($null -ne $cachedArtwork) { $cachedArtwork.art_hash } else { $null }
         accent_hue = if ($null -ne $cachedArtwork) { $cachedArtwork.accent_hue } else { $null }
+        track_key = Get-TrackKey -Title $trackInfo.title -Artist $trackInfo.artist
+        position_ms = 0
+        duration_ms = 0
+        playback_state = 'playing-fallback'
+        timeline_updated_at_ms = 0
         updated_at_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         error = if ($null -ne $cachedArtwork) {
             'windows media session unavailable; using QQMusic window title + local artwork cache fallback'
@@ -376,15 +511,13 @@ function Get-QQMusicWindowFallback {
 }
 
 function Get-CloudMusicWindowFallback {
-    $process = Get-Process cloudmusic -ErrorAction SilentlyContinue |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_.MainWindowTitle) } |
-        Select-Object -First 1
+    $windowTitle = Get-BestWindowTitleForProcessName -ProcessName 'cloudmusic' -Player 'netease'
 
-    if ($null -eq $process) {
+    if ([string]::IsNullOrWhiteSpace($windowTitle)) {
         return $null
     }
 
-    $trackInfo = Get-WindowTrackInfo -WindowTitle $process.MainWindowTitle
+    $trackInfo = Get-WindowTrackInfo -WindowTitle $windowTitle
     $artwork = $null
     if (-not [string]::IsNullOrWhiteSpace($trackInfo.title)) {
         $artwork = Get-CloudMusicArtwork -Title $trackInfo.title -Artist $trackInfo.artist
@@ -401,6 +534,11 @@ function Get-CloudMusicWindowFallback {
         art_mime_type = if ($null -ne $artwork) { $artwork.art_mime_type } else { $null }
         art_hash = if ($null -ne $artwork) { $artwork.art_hash } else { $null }
         accent_hue = if ($null -ne $artwork) { $artwork.accent_hue } else { $null }
+        track_key = Get-TrackKey -Title $trackInfo.title -Artist $trackInfo.artist
+        position_ms = 0
+        duration_ms = 0
+        playback_state = 'playing-fallback'
+        timeline_updated_at_ms = 0
         updated_at_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         error = if ($null -ne $artwork) {
             'windows media session unavailable; using CloudMusic window title + playingList artwork fallback'
@@ -441,6 +579,11 @@ function New-DefaultResult {
         art_mime_type = $null
         art_hash = $null
         accent_hue = $null
+        track_key = ''
+        position_ms = 0
+        duration_ms = 0
+        playback_state = ''
+        timeline_updated_at_ms = 0
         updated_at_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         error = $ErrorMessage
     }
@@ -497,6 +640,7 @@ try {
         $result.title = Normalize-Text $properties.Title
         $result.artist = Normalize-Text $properties.Artist
         $result.album_title = Normalize-Text $properties.AlbumTitle
+        $result.track_key = Get-TrackKey -Title $result.title -Artist $result.artist
 
         $thumbnailBytes = Get-ThumbnailBytes $properties.Thumbnail
         if ($null -ne $thumbnailBytes -and $thumbnailBytes.Length -gt 0) {
@@ -506,6 +650,26 @@ try {
             $result.art_data_url = $artPayload.art_data_url
             $result.accent_hue = $artPayload.accent_hue
         }
+    }
+
+    try {
+        $playbackInfo = $session.GetPlaybackInfo()
+        if ($null -ne $playbackInfo) {
+            $result.playback_state = (Normalize-Text $playbackInfo.PlaybackStatus).ToLowerInvariant()
+        }
+    } catch {
+    }
+
+    try {
+        $timeline = $session.GetTimelineProperties()
+        if ($null -ne $timeline) {
+            $result.position_ms = [int][Math]::Max(0, [Math]::Round($timeline.Position.TotalMilliseconds))
+            $result.duration_ms = [int][Math]::Max(0, [Math]::Round($timeline.EndTime.TotalMilliseconds))
+            if ($timeline.LastUpdatedTime) {
+                $result.timeline_updated_at_ms = [DateTimeOffset]$timeline.LastUpdatedTime | ForEach-Object { $_.ToUnixTimeMilliseconds() }
+            }
+        }
+    } catch {
     }
 
     if (-not $result.matched_player) {
